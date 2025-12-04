@@ -1,0 +1,78 @@
+name: Build & Deploy WebGL
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Cache Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-WebGL-${{ hashFiles('Assets/**','Packages/**','ProjectSettings/**') }}
+          restore-keys: Library-WebGL-
+
+      - name: Build (WebGL)
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE:  ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL:    ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: WebGL
+          projectPath: .
+          # unityVersion は書かない → ProjectVersion.txt から自動判定
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare Pages content
+        run: |
+          set -e
+          ROOT=$(dirname "$(find build -maxdepth 4 -type f -name index.html | head -n 1)")
+          echo "Detected WebGL root: $ROOT"
+          if [ -z "$ROOT" ]; then
+            echo "ERROR: WebGL build output not found under ./build"
+            exit 1
+          fi
+          rm -rf _site && mkdir -p _site
+          cp -a "$ROOT"/. _site/
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
