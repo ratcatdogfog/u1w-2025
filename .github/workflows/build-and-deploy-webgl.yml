@@ -1,10 +1,10 @@
-name: Build & Deploy WebGL
+name: Build & Deploy WebGL (auto)
 
 on:
   push:
     branches:
-      - main
-  workflow_dispatch:
+      - main        # 必要ならここを変える
+  workflow_dispatch: # 手動トリガーも残しておく
 
 permissions:
   contents: read
@@ -26,13 +26,15 @@ jobs:
           lfs: true
           fetch-depth: 0
 
+      # ---- Library キャッシュ ----
       - name: Cache Library
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: Library
           key: Library-WebGL-${{ hashFiles('Assets/**','Packages/**','ProjectSettings/**') }}
           restore-keys: Library-WebGL-
 
+      # ---- Unity WebGL ビルド ----
       - name: Build (WebGL)
         uses: game-ci/unity-builder@v4
         env:
@@ -41,15 +43,17 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           targetPlatform: WebGL
-          projectPath: .
-          # unityVersion は書かない → ProjectVersion.txt から自動判定
+          # ※ unityVersion / projectPath / buildsPath などはあえて指定しない
+          #    → ProjectSettings/ProjectVersion.txt などから自動判定させる
 
+      # ---- GitHub Pages 用セットアップ ----
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Prepare Pages content
         run: |
           set -e
+          # build 以下から index.html を探して、その親ディレクトリを WebGL ルートとみなす
           ROOT=$(dirname "$(find build -maxdepth 4 -type f -name index.html | head -n 1)")
           echo "Detected WebGL root: $ROOT"
           if [ -z "$ROOT" ]; then
@@ -58,6 +62,7 @@ jobs:
           fi
           rm -rf _site && mkdir -p _site
           cp -a "$ROOT"/. _site/
+          # Jekyll に邪魔されないようにする
           touch _site/.nojekyll
 
       - name: Upload Pages artifact
