@@ -6,7 +6,6 @@ using UnityEngine.InputSystem; // ★ 追加
 public class SimpleHumanoidController : MonoBehaviour
 {
     public float moveSpeed = 4f;
-    public float gravity = -9.81f;
 
     private CharacterController controller;
     private Animator animator;
@@ -42,14 +41,6 @@ public class SimpleHumanoidController : MonoBehaviour
 
         Vector3 move = transform.forward * inputDir.magnitude;
         controller.Move(move * moveSpeed * Time.deltaTime);
-
-        if (controller.isGrounded && velocity.y < 0f)
-        {
-            velocity.y = -2f;
-        }
-
-        velocity.y += gravity * Time.deltaTime;
-        controller.Move(velocity * Time.deltaTime);
 
         float speedParam = inputDir.magnitude;
         animator.SetFloat("Speed", speedParam);
