@@ -3,8 +3,8 @@ name: Build & Deploy WebGL (auto)
 on:
   push:
     branches:
-      - main        # 必要ならここを変える
-  workflow_dispatch: # 手動トリガーも残しておく
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,12 +27,34 @@ jobs:
           fetch-depth: 0
 
       # ---- Library キャッシュ ----
+      # ※もしまた "no space left on device" が出るなら、まずこのキャッシュを一旦コメントアウトして試すのが早いです。
       - name: Cache Library
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: Library
           key: Library-WebGL-${{ hashFiles('Assets/**','Packages/**','ProjectSettings/**') }}
-          restore-keys: Library-WebGL-
+          restore-keys: |
+            Library-WebGL-
+
+      # ---- ディスク空き容量の確保（Unityの巨大Dockerイメージ展開対策）----
+      - name: Free disk space (before Unity build)
+        run: |
+          set -eux
+          echo "== disk before =="
+          df -h
+
+          # 大きいプリインストール類を消して空きを作る（Unityビルドには不要なもの）
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/swift || true
+
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo "== disk after =="
+          df -h
 
       # ---- Unity WebGL ビルド ----
       - name: Build (WebGL)
@@ -43,8 +65,7 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           targetPlatform: WebGL
-          # ※ unityVersion / projectPath / buildsPath などはあえて指定しない
-          #    → ProjectSettings/ProjectVersion.txt などから自動判定させる
+          # unityVersion を書かない → ProjectSettings/ProjectVersion.txt から自動判定
 
       # ---- GitHub Pages 用セットアップ ----
       - name: Setup Pages
@@ -53,7 +74,6 @@ jobs:
       - name: Prepare Pages content
         run: |
           set -e
-          # build 以下から index.html を探して、その親ディレクトリを WebGL ルートとみなす
           ROOT=$(dirname "$(find build -maxdepth 4 -type f -name index.html | head -n 1)")
           echo "Detected WebGL root: $ROOT"
           if [ -z "$ROOT" ]; then
@@ -62,7 +82,6 @@ jobs:
           fi
           rm -rf _site && mkdir -p _site
           cp -a "$ROOT"/. _site/
-          # Jekyll に邪魔されないようにする
           touch _site/.nojekyll
 
       - name: Upload Pages artifact
