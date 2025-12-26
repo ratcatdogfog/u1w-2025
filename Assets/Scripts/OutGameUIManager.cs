@@ -8,9 +8,11 @@ public class OutGameUIManager : MonoBehaviour
     [SerializeField] GameObject mainMenuPanel;
     [SerializeField] GameObject settingsPanel;
     [SerializeField] GameObject creditsPanel;
+    [SerializeField] GameObject illustrationPanel; // 一枚絵を置く用のUI
 
     [Header("Transition")]
-    [SerializeField] TransitionController transition;
+    [SerializeField] TransitionController titleToMainMenuTransition; // タイトルからメインメニューへの遷移用
+    [SerializeField] TransitionController mainMenuToGameTransition; // メインメニューからインゲームへの遷移用
 
     void Awake()
     {
@@ -19,8 +21,8 @@ public class OutGameUIManager : MonoBehaviour
         
         // 初期状態：タイトルだけ表示
         SetOnly(titlePanel);
-        // 遷移演出側も初期化（Progress=1、alpha=1など）
-        if (transition) transition.ResetState();
+        // 遷移演出側の初期化は必要に応じて明示的にResetState()を呼び出す
+        // （現在のアルファ値を保持するため、Awake()では自動的にリセットしない）
     }
 
     void EnsureEventSystem()
@@ -38,14 +40,14 @@ public class OutGameUIManager : MonoBehaviour
     // タイトル画面：クリック（透明フルスクリーンButtonのOnClickから呼ぶ想定）
     public void OnTitleScreenClicked()
     {
-        if (transition != null)
+        if (titleToMainMenuTransition != null)
         {
             // シームレスな遷移のため、先に下のPanel（mainMenuPanel）をactiveにする
             // sortorderが下なので、transitionの下に配置され、準備完了状態になる
             if (mainMenuPanel) mainMenuPanel.SetActive(true);
             
             // transition開始（transition中はtitlePanelはactiveのまま）
-            transition.PlayToBlack(() =>
+            titleToMainMenuTransition.PlayToBlack(() =>
             {
                 // transition完了後にtitlePanelを非activeにする
                 if (titlePanel) titlePanel.SetActive(false);
@@ -53,7 +55,7 @@ public class OutGameUIManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("TransitionControllerが設定されていません。");
+            Debug.LogWarning("[OutGameUIManager] titleToMainMenuTransitionが設定されていません。");
             SetOnly(mainMenuPanel);
         }
     }
@@ -61,17 +63,38 @@ public class OutGameUIManager : MonoBehaviour
     // メインメニュー：各ボタン
     public void OpenSettings()
     {
+        Debug.Log("OpenSettings called");
         SetOnly(settingsPanel);
     }
 
     public void OpenCredits()
     {
+        Debug.Log("OpenCredits called");
         SetOnly(creditsPanel);
     }
 
     public void BackToMainMenu()
     {
+        Debug.Log("BackToMainMenu called");
         SetOnly(mainMenuPanel);
+    }
+
+    // ゲーム開始ボタン：インゲームへ遷移（同じシーン内で完結）
+    public void StartGame()
+    {
+        if (mainMenuToGameTransition != null)
+        {
+            // _Progressを0から1に遷移させるアニメーション
+            mainMenuToGameTransition.PlayFromBlack(() =>
+            {
+                // 遷移完了後にillustrationPanelを表示
+                SetOnly(illustrationPanel);
+            });
+        }
+        else
+        {
+            Debug.LogWarning("[OutGameUIManager] mainMenuToGameTransitionが設定されていません。");
+        }
     }
 
     void SetOnly(GameObject activePanel)
@@ -80,5 +103,6 @@ public class OutGameUIManager : MonoBehaviour
         if (mainMenuPanel) mainMenuPanel.SetActive(activePanel == mainMenuPanel);
         if (settingsPanel) settingsPanel.SetActive(activePanel == settingsPanel);
         if (creditsPanel) creditsPanel.SetActive(activePanel == creditsPanel);
+        if (illustrationPanel) illustrationPanel.SetActive(activePanel == illustrationPanel);
     }
 }
