@@ -101,10 +101,14 @@ public class TransitionController : MonoBehaviour
             return;
         }
 
-        // GameObjectが非アクティブな場合は実行しない
-        if (!gameObject.activeInHierarchy)
+        // 1→0への遷移なので、現在の値が0の場合はエラー
+        float currentProgress = _mat.HasProperty(_id) ? _mat.GetFloat(_id) : 1f;
+        float currentImageAlpha = alsoFadeImageColor ? backgroundImage.color.a : 1f;
+        
+        const float epsilon = 0.01f; // 浮動小数点数の誤差を考慮
+        if (currentProgress < epsilon || currentImageAlpha < epsilon)
         {
-            Debug.LogWarning($"[TransitionController] PlayToBlack: GameObjectが非アクティブです。 GameObject: {gameObject.name}");
+            Debug.LogError($"[TransitionController] PlayToBlack: 不正な値です。1→0への遷移を試みましたが、現在の値が既に0に近い値です。 Progress: {currentProgress}, ImageAlpha: {currentImageAlpha}, GameObject: {gameObject.name}");
             onComplete?.Invoke();
             return;
         }
@@ -129,10 +133,14 @@ public class TransitionController : MonoBehaviour
             return;
         }
 
-        // GameObjectが非アクティブな場合は実行しない
-        if (!gameObject.activeInHierarchy)
+        // 0→1への遷移なので、現在の値が1の場合はエラー
+        float currentProgress = _mat.HasProperty(_id) ? _mat.GetFloat(_id) : 0f;
+        float currentImageAlpha = alsoFadeImageColor ? backgroundImage.color.a : 0f;
+        
+        const float epsilon = 0.01f; // 浮動小数点数の誤差を考慮
+        if (currentProgress > (1f - epsilon) || currentImageAlpha > (1f - epsilon))
         {
-            Debug.LogWarning($"[TransitionController] PlayFromBlack: GameObjectが非アクティブです。 GameObject: {gameObject.name}");
+            Debug.LogError($"[TransitionController] PlayFromBlack: 不正な値です。0→1への遷移を試みましたが、現在の値が既に1に近い値です。 Progress: {currentProgress}, ImageAlpha: {currentImageAlpha}, GameObject: {gameObject.name}");
             onComplete?.Invoke();
             return;
         }

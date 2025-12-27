@@ -1,6 +1,7 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
-using System.Collections;
+using UnityEngine.Events;
 
 /// <summary>
 /// 画像を順番に切り替えるコンポーネント。
@@ -16,22 +17,38 @@ public class ImageSwitcher : MonoBehaviour
     [SerializeField] private GameObject targetPanel;
     
     [Header("Transition Settings")]
-    [SerializeField] private TransitionController transitionController;
     [SerializeField] private GameObject activateOnTransition;
     [SerializeField] private GameObject[] deactivateOnTransition;
-    [SerializeField] private float fadeInDuration = 0.5f;
+    
+    [Header("UI Manager")]
+    [SerializeField] private GameUIManager gameUIManager; // テロップ用UI表示用、トランジション管理用
+    
+    [Header("Clickable Indicator")]
+    [SerializeField] private ClickableIndicator clickableIndicator; // クリッカブルであることを示すマーク
+    [SerializeField] private float clickableIndicatorDelay = 2f; // 画像切り替え後の表示遅延時間（秒）
+    
+    [Header("Events")]
+    /// <summary>
+    /// 画面遷移終了時に発火するイベント（外部から購読可能）
+    /// </summary>
+    public UnityEvent onTransitionCompleted;
 
-    // 現在表示中のSpriteのインデックス（-1は未初期化状態）
-    private int currentSpriteIndex = -1;
-    
-    // 最初のフェードイン演出が実行済みかどうか
-    private bool hasPerformedFirstSwitch = false;
-    
-    // targetPanelのアクティブ状態をチェック済みかどうか
-    private bool hasCheckedPanelActivation = false;
+    private int currentSpriteIndex = -1; // 現在表示中のSpriteのインデックス（-1は未初期化状態）
+    private bool hasPerformedFirstSwitch = false; // 最初のフェードイン演出が実行済みかどうか
+    private bool hasCheckedPanelActivation = false; // targetPanelのアクティブ状態をチェック済みかどうか
+    private Coroutine clickableIndicatorDelayCoroutine = null; // クリッカブルインジケーターの遅延表示用コルーチン
+    private bool wasPanelActive = false; // 前回のPanelのアクティブ状態
+    private float switchImageCooldownElapsed = 0f; // SwitchImage()のクールダウン経過時間（秒）
+    private bool wasCanSwitchImage = false; // 前回のcanSwitchImageの値
 
     private void Awake()
     {
+        // 必須参照のチェック
+        if (clickableIndicator == null)
+        {
+            Debug.LogError("[ImageSwitcher] clickableIndicatorが設定されていません。InspectorでClickableIndicatorコンポーネントを割り当ててください。", this);
+        }
+
         InitializeTransitionObjects();
     }
 
@@ -65,64 +82,122 @@ public class ImageSwitcher : MonoBehaviour
     }
 
     /// <summary>
-    /// 最初の画像を表示し、フェードイン用にalphaを0に設定する
+    /// 最初の画像を表示する
     /// </summary>
     private void InitializeFirstImage()
     {
         if (sprites == null || sprites.Length == 0 || targetImage == null)
         {
-            Debug.LogWarning("[ImageSwitcher] InitializeFirstImage() - spritesまたはtargetImageが設定されていません。");
             return;
         }
 
         currentSpriteIndex = 0;
         targetImage.sprite = sprites[currentSpriteIndex];
-        
-        // フェードイン演出のために、最初の画像のalphaを0に設定
-        Color imageColor = targetImage.color;
-        imageColor.a = 0f;
-        targetImage.color = imageColor;
     }
 
     private void Update()
     {
         bool panelActive = IsPanelActive();
         
-        // targetPanelがアクティブになった時点で、最初のフェードインを自動実行
-        if (!hasCheckedPanelActivation && panelActive && !hasPerformedFirstSwitch)
+        // Panelのアクティブ状態が変化した時だけクリッカブル状態を更新
+        if (panelActive != wasPanelActive)
         {
-            hasCheckedPanelActivation = true;
-            HandleFirstSwitch();
-            return;
+            wasPanelActive = panelActive;
+            if (panelActive)
+            {
+                // Panelがアクティブになった時、クールダウンカウントを0にリセット
+                switchImageCooldownElapsed = 0f;
+                
+                if (!hasCheckedPanelActivation && !hasPerformedFirstSwitch)
+                {
+                    hasCheckedPanelActivation = true;
+                    HandleFirstSwitch();
+                }
+                else
+                {
+                    // 既に初期化済みの場合はクリッカブル状態を更新
+                    NotifyClickableState();
+                }
+            }
+            else
+            {
+                // Panelが非アクティブになった時は非表示にしてクールダウンをリセット
+                switchImageCooldownElapsed = 0f;
+                if (clickableIndicator != null)
+                {
+                    clickableIndicator.SetClickable(false);
+                }
+            }
         }
         
-        // Panelがアクティブで、Submitボタンが押された時に画像を切り替え
-        if (panelActive && Input.GetButtonDown("Submit"))
+        // Panelがアクティブな時、毎フレームdeltaTimeを加算
+        if (panelActive)
         {
-            SwitchImage();
+            switchImageCooldownElapsed += Time.deltaTime;
+        }
+        
+        // クールダウンが完了したかどうかを判定
+        bool cooldownComplete = switchImageCooldownElapsed >= clickableIndicatorDelay;
+        bool canSwitchImage = panelActive && cooldownComplete;
+        
+        // canSwitchImageの値が変化した時だけログ出力
+        if (canSwitchImage != wasCanSwitchImage)
+        {
+            wasCanSwitchImage = canSwitchImage;
+            
+            // canSwitchImageの値が変化した時にクリッカブル状態を更新
+            NotifyClickableState();
+        }
+        
+        if (canSwitchImage && Input.GetButtonDown("Submit"))
+        {
+            SwitchImageInternal();
         }
     }
 
-    private bool IsPanelActive()
+    /// <summary>
+    /// targetPanelがアクティブかどうかを判定
+    /// </summary>
+    public bool IsPanelActive()
     {
         return targetPanel != null && targetPanel.activeSelf;
     }
 
     /// <summary>
-    /// 画像を次のSpriteに切り替える
+    /// 画像を次のSpriteに切り替える（外部から呼ばれる場合、クールダウンチェックを行う）
     /// 最初の呼び出し時はフェードイン演出を実行し、最後のSprite後は画面遷移を実行する
     /// </summary>
     public void SwitchImage()
     {
         if (!ValidateSprites()) return;
 
-        // 最初の呼び出し時はフェードイン演出を実行
+        // 最初の呼び出し時はフェードイン演出を実行（クールダウンチェックをスキップ）
         if (!hasPerformedFirstSwitch)
         {
             HandleFirstSwitch();
+            // 最初のフェードイン時はクールダウンをリセットしない（Panelがアクティブになった時点で既に開始済み）
             return;
         }
 
+        // クールダウンチェック（外部から直接呼ばれた場合でもチェック）
+        bool panelActive = IsPanelActive();
+        bool cooldownComplete = switchImageCooldownElapsed >= clickableIndicatorDelay;
+        bool canSwitchImage = panelActive && cooldownComplete;
+        
+        if (!canSwitchImage)
+        {
+            return;
+        }
+
+        // 内部メソッドを呼び出し
+        SwitchImageInternal();
+    }
+
+    /// <summary>
+    /// 画像を次のSpriteに切り替える（内部処理、クールダウンチェック済み）
+    /// </summary>
+    private void SwitchImageInternal()
+    {
         // 最後のSprite表示中に再度クリックされた場合は画面遷移を実行
         if (IsLastSprite())
         {
@@ -132,6 +207,9 @@ public class ImageSwitcher : MonoBehaviour
 
         // 次の画像に切り替え
         SwitchToNextSprite();
+        
+        // SwitchImage()が実行された時、クールダウンカウントを0にリセット
+        switchImageCooldownElapsed = 0f;
     }
 
     private bool ValidateSprites()
@@ -140,24 +218,28 @@ public class ImageSwitcher : MonoBehaviour
     }
 
     /// <summary>
-    /// 最初の画像切り替え時の処理（フェードイン演出を開始）
+    /// 最初の画像切り替え時の処理（SceneTransitionでフェードイン演出を開始）
+    /// mainMenuToGameTransitionを使用し、もともと黒(1)だったものから0へと変化させる
     /// </summary>
     private void HandleFirstSwitch()
     {
-        if (targetImage == null)
+        hasPerformedFirstSwitch = true;
+        
+        TransitionController transition = gameUIManager?.GetMainTransition();
+        if (transition != null)
         {
-            Debug.LogWarning("[ImageSwitcher] HandleFirstSwitch() - targetImageがnullです。");
-            return;
+            // SceneTransitionで1→0への遷移を実行（もともと黒だったものから0へ）
+            transition.PlayToBlack();
         }
 
-        hasPerformedFirstSwitch = true;
-        StartCoroutine(FadeInImage());
+        // クリッカブル状態の更新は、Update()内でクールダウンが完了した時に行う
+        // （最初の画像表示時はクールダウンが完了するまでクリッカブルマークを表示しない）
     }
 
     /// <summary>
     /// 現在表示中のSpriteが最後のものかどうかを判定
     /// </summary>
-    private bool IsLastSprite()
+    public bool IsLastSprite()
     {
         return currentSpriteIndex == sprites.Length - 1;
     }
@@ -167,6 +249,19 @@ public class ImageSwitcher : MonoBehaviour
     /// </summary>
     private void HandleLastSpriteClick()
     {
+        // 遅延表示コルーチンを停止（最後の画像なので表示しない）
+        if (clickableIndicatorDelayCoroutine != null)
+        {
+            StopCoroutine(clickableIndicatorDelayCoroutine);
+            clickableIndicatorDelayCoroutine = null;
+        }
+
+        // 最後のSpriteなので非表示にする
+        if (clickableIndicator != null)
+        {
+            clickableIndicator.SetClickable(false);
+        }
+
         DeactivateObjectsOnTransition();
         ActivateTransitionObject();
         ExecuteTransition();
@@ -193,25 +288,40 @@ public class ImageSwitcher : MonoBehaviour
     /// </summary>
     private void ActivateTransitionObject()
     {
-        if (activateOnTransition != null)
-        {
-            activateOnTransition.SetActive(true);
-        }
+        activateOnTransition?.SetActive(true);
     }
 
     /// <summary>
     /// 画面遷移を実行し、完了後にtargetPanelを非アクティブにする
+    /// テロップ用UIは画面遷移開始前に表示する（TransitionControllerのGameObjectが非アクティブにならないように注意）
+    /// illustrationPanelTransitionを使用し、1→0への遷移を実行
     /// </summary>
     private void ExecuteTransition()
     {
-        if (transitionController != null)
+        TransitionController transition = gameUIManager?.GetIllustrationPanelTransition();
+        if (transition != null)
         {
-            transitionController.PlayToBlack(() => DeactivateTargetPanel());
+            // TransitionControllerのGameObjectがアクティブであることを確認
+            if (!transition.gameObject.activeInHierarchy)
+            {
+                transition.gameObject.SetActive(true);
+            }
+            
+            // 画面遷移開始前にテロップ用UIを表示
+            ShowTelopPanel();
+            
+            transition.PlayToBlack(() =>
+            {
+                DeactivateTargetPanel();
+                onTransitionCompleted?.Invoke();
+            });
         }
         else
         {
             // TransitionControllerが設定されていない場合は即座に非アクティブ化
+            ShowTelopPanel();
             DeactivateTargetPanel();
+            onTransitionCompleted?.Invoke();
         }
     }
 
@@ -220,11 +330,17 @@ public class ImageSwitcher : MonoBehaviour
     /// </summary>
     private void DeactivateTargetPanel()
     {
-        if (targetPanel != null)
-        {
-            targetPanel.SetActive(false);
-        }
+        targetPanel?.SetActive(false);
     }
+
+    /// <summary>
+    /// テロップ用UIを表示する
+    /// </summary>
+    private void ShowTelopPanel()
+    {
+        gameUIManager?.ShowTelopPanel();
+    }
+
 
     /// <summary>
     /// 次のSpriteに切り替える
@@ -232,42 +348,72 @@ public class ImageSwitcher : MonoBehaviour
     private void SwitchToNextSprite()
     {
         currentSpriteIndex++;
-        if (targetImage != null)
+        if (targetImage != null && currentSpriteIndex < sprites.Length)
         {
             targetImage.sprite = sprites[currentSpriteIndex];
         }
+
+        // 画像切り替え直後は一旦非表示にして、指定秒数後に表示する（最後の画像も含む）
+        StartClickableIndicatorDelay();
     }
 
     /// <summary>
-    /// 画像のalpha値を0から1にフェードインさせるコルーチン
+    /// クリッカブルインジケーターの遅延表示を開始する
     /// </summary>
-    private IEnumerator FadeInImage()
+    private void StartClickableIndicatorDelay()
     {
-        if (targetImage == null)
+        // 既存のコルーチンを停止
+        if (clickableIndicatorDelayCoroutine != null)
         {
-            Debug.LogError("[ImageSwitcher] FadeInImage() - targetImageがnullです。");
-            yield break;
+            StopCoroutine(clickableIndicatorDelayCoroutine);
         }
 
-        if (fadeInDuration <= 0f)
+        // 一旦非表示にする
+        if (clickableIndicator != null)
         {
-            Debug.LogWarning($"[ImageSwitcher] FadeInImage() - fadeInDurationが無効な値です: {fadeInDuration}");
+            clickableIndicator.SetClickable(false);
         }
 
-        Color imageColor = targetImage.color;
-        float elapsed = 0f;
-
-        while (elapsed < fadeInDuration)
-        {
-            elapsed += Time.deltaTime;
-            float normalizedTime = Mathf.Clamp01(elapsed / fadeInDuration);
-            imageColor.a = Mathf.Lerp(0f, 1f, normalizedTime);
-            targetImage.color = imageColor;
-            yield return null;
-        }
-
-        // 最終値を確実に1に設定
-        imageColor.a = 1f;
-        targetImage.color = imageColor;
+        // 指定秒数後に表示するコルーチンを開始
+        clickableIndicatorDelayCoroutine = StartCoroutine(ShowClickableIndicatorAfterDelay());
     }
+
+    /// <summary>
+    /// 指定秒数後にクリッカブルインジケーターを表示するコルーチン
+    /// </summary>
+    private IEnumerator ShowClickableIndicatorAfterDelay()
+    {
+        yield return new WaitForSeconds(clickableIndicatorDelay);
+
+        // クリッカブルな状態を再評価して表示（最後の画像も含む）
+        NotifyClickableState();
+
+        clickableIndicatorDelayCoroutine = null;
+    }
+
+    /// <summary>
+    /// クリッカブルな状態をClickableIndicatorに伝達する（状態が変化した時のみ呼ぶ）
+    /// </summary>
+    private void NotifyClickableState()
+    {
+        if (clickableIndicator == null)
+        {
+            return;
+        }
+
+        bool panelActive = IsPanelActive();
+
+        // クリッカブルな条件：
+        // 1. Panelがアクティブ
+        // 2. 最初のフェードインが完了している
+        // 3. クールダウンが完了している
+        bool cooldownComplete = switchImageCooldownElapsed >= clickableIndicatorDelay;
+        bool isClickable = panelActive && 
+                          hasPerformedFirstSwitch &&
+                          cooldownComplete;
+
+        // クリック可能な状態を伝達するのみ（表示/非表示の判断はClickableIndicatorが行う）
+        clickableIndicator.SetClickable(isClickable);
+    }
+
 }
