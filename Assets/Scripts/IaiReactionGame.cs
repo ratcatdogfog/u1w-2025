@@ -26,6 +26,7 @@ public class IaiReactionGame : MonoBehaviour
     [SerializeField] private float successThreshold = 0.5f; // 成功判定の反応速度閾値（秒）
     [SerializeField] private float roundInterval = 1.5f;    // ラウンド間のインターバル（秒）
     [SerializeField] private float clickTimeout = 2.0f;     // クリック制限時間（秒）
+    [SerializeField] private bool alwaysWin = false;            // 必勝モード（ONの場合は常に勝利）
     
     [Header("インゲーム非表示設定")]
     [SerializeField] private List<GameObject> objectsToHideOnGameStart = new List<GameObject>();  // インゲーム開始時に非表示にするオブジェクト
@@ -121,31 +122,23 @@ public class IaiReactionGame : MonoBehaviour
         // 1回のラウンドを実行
         yield return StartCoroutine(PlayRound());
         
-        // 成功した場合
-        if (roundSuccess)
+        // 勝敗に関わらず、次のラウンドに進む
+        currentRound++;
+        
+        // 次の敵がいるかどうかを判定
+        bool hasNextEnemy = currentRound < enemyAvatars.Length;
+        
+        if (hasNextEnemy)
         {
-            currentRound++;
-            
-            // 次の敵がいるかどうかを判定
-            bool hasNextEnemy = currentRound < enemyAvatars.Length;
-            
-            if (hasNextEnemy)
-            {
-                // 次の勝負の準備（暗転中に敵キャラを入れ替える）
-                // ここでは一旦ゲームを終了し、次の勝負は外部から再開される想定
-                // （シナリオパートを挟むため）
-                EndGame(true, true); // 2つ目の引数は「次の勝負がある」を示す
-            }
-            else
-            {
-                // 全ての勝負が終了
-                EndGame(true, false);
-            }
+            // 次の勝負の準備（暗転中に敵キャラを入れ替える）
+            // ここでは一旦ゲームを終了し、次の勝負は外部から再開される想定
+            // （シナリオパートを挟むため）
+            EndGame(roundSuccess, true); // 1つ目の引数は勝敗、2つ目の引数は「次の勝負がある」を示す
         }
         else
         {
-            // 失敗した場合はゲーム終了
-            EndGame(false, false);
+            // 全ての勝負が終了
+            EndGame(roundSuccess, false);
         }
     }
     
@@ -325,8 +318,11 @@ public class IaiReactionGame : MonoBehaviour
         // フラッシュ効果を表示（同時に結果のポーズに遷移）
         StartCoroutine(ShowFlash());
         
+        // 必勝モードがONの場合は常に成功判定
+        bool isSuccess = alwaysWin || (reactionTime <= successThreshold);
+        
         // フラッシュと同時に結果のポーズに遷移（1フレーム以内）
-        if (reactionTime <= successThreshold)
+        if (isSuccess)
         {
             // 成功：プレイヤー→Finish、敵→Yarare
             SetResultPose(true);
@@ -421,7 +417,7 @@ public class IaiReactionGame : MonoBehaviour
     
     /// <summary>
     /// タイムアウト時の処理（クリックされなかった場合）- コルーチン版
-    /// フラッシュを焚いて負け判定にする
+    /// フラッシュを焚いて負け判定にする（必勝モードがONの場合は勝ち判定）
     /// </summary>
     private IEnumerator OnClickTimeoutCoroutine()
     {
@@ -435,14 +431,31 @@ public class IaiReactionGame : MonoBehaviour
         // フラッシュ効果を表示（同時に結果のポーズに遷移）
         StartCoroutine(ShowFlash());
         
-        // 失敗のポーズに遷移（プレイヤー→Yarare、敵→Finish）
-        SetResultPose(false);
+        // 必勝モードがONの場合は勝ち判定、OFFの場合は負け判定
+        if (alwaysWin)
+        {
+            // 成功のポーズに遷移（プレイヤー→Finish、敵→Yarare）
+            SetResultPose(true);
+            resultCoroutine = StartCoroutine(OnSuccessCoroutine(0f)); // タイムアウトなので反応時間は0として扱う
+        }
+        else
+        {
+            // 失敗のポーズに遷移（プレイヤー→Yarare、敵→Finish）
+            SetResultPose(false);
+        }
         
         // フラッシュ効果が終わるまで待つ
         yield return new WaitForSeconds(flashDuration);
         
         // モーションが再生される時間を待つ
         yield return new WaitForSeconds(1.0f);
+        
+        // 必勝モードで成功コルーチンが実行された場合は、その完了を待つ
+        if (alwaysWin && resultCoroutine != null)
+        {
+            yield return resultCoroutine;
+            resultCoroutine = null;
+        }
     }
     
     /// <summary>
@@ -522,8 +535,8 @@ public class IaiReactionGame : MonoBehaviour
         TransitionController transition = gameUIManager?.GetMainTransition();
         if (transition != null)
         {
-            // 勝った場合で次の勝負がある場合、暗転中に敵キャラを入れ替える
-            if (won && hasNextRound && currentRound < enemyAvatars.Length)
+            // 次の勝負がある場合、暗転中に敵キャラを入れ替える（勝敗に関わらず）
+            if (hasNextRound && currentRound < enemyAvatars.Length)
             {
                 // まず暗転（0から1への遷移）
                 bool darkTransitionComplete = false;

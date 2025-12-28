@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class CsvScenarioPlayer : MonoBehaviour
 {
@@ -32,10 +33,14 @@ public class CsvScenarioPlayer : MonoBehaviour
     [SerializeField] private TMPHoverColor nameTMPHoverColor;       // 名前テキストのホバー検知用（未設定の場合は自動取得）
     [SerializeField] private TMPHoverColor lineTMPHoverColor;        // セリフテキストのホバー検知用（未設定の場合は自動取得）
     [SerializeField] private GameUIManager gameUIManager;           // GameUIManagerへの参照（明転用）
+    [SerializeField] private Image backgroundImage;                 // UIのBackgroundのImage（モノローグ時に表示）
     
     [Header("選択肢")]
     [SerializeField] private GameObject choice1;                     // 選択肢1のオブジェクト
     [SerializeField] private GameObject choice2;                     // 選択肢2のオブジェクト
+    
+    [Header("エンディング")]
+    [SerializeField] private EndingImageSwitcher endingImageSwitcher; // エンディング用の画像切り替えコンポーネント
 
     private readonly List<Row> rows = new();
     private int index = 0;
@@ -46,10 +51,13 @@ public class CsvScenarioPlayer : MonoBehaviour
     private bool isInitialized = false;
     private Coroutine typewriterCoroutine = null;
     private Coroutine delayCoroutine = null;                          // 間隔待機用のコルーチン
+    private Coroutine backgroundFadeCoroutine = null;                 // Backgroundのフェードアウト用コルーチン
     private bool isTypewriting = false;
     private string currentFullText = "";                             // 現在表示中の全文テキスト
     private bool wasTelopPanelActive = false;                        // 前回のtelopPanelのアクティブ状態
     private bool wasTypewriting = false;                              // 前回のタイプライター状態
+    private string previousNameForBackground = "";                    // Background制御用の前回のキャラ名
+    private bool isInEnding = false;                                  // エンディング中かどうか
 
     [Serializable]
     private class Row
@@ -84,6 +92,15 @@ public class CsvScenarioPlayer : MonoBehaviour
         if (nameTMP != null) nameTMP.text = "";
         if (lineTMP != null) lineTMP.text = "";
 
+        // BackgroundのImageを初期化（非表示、alpha=0）
+        if (backgroundImage != null)
+        {
+            Color color = backgroundImage.color;
+            color.a = 0f;
+            backgroundImage.color = color;
+            backgroundImage.enabled = false;
+        }
+
         // 選択肢を非表示にする
         if (choice1 != null) choice1.SetActive(false);
         if (choice2 != null) choice2.SetActive(false);
@@ -105,6 +122,7 @@ public class CsvScenarioPlayer : MonoBehaviour
         index = 0;
         lastName = "";
         lastDelay = 0f;
+        previousNameForBackground = "";
         isInitialized = true;
 
         // autoStartがtrueの場合のみ最初の表示を行う
@@ -153,6 +171,9 @@ public class CsvScenarioPlayer : MonoBehaviour
     {
         // 初期化されていない、または表示が開始されていない場合は処理しない
         if (!isInitialized || index < 0) return;
+        
+        // エンディング中の場合は通常の処理をスキップ
+        if (isInEnding) return;
 
         // telopPanelのアクティブ状態が変化した時だけクリッカブル状態を更新
         bool telopPanelActive = telopPanel != null && telopPanel.activeSelf;
@@ -292,6 +313,13 @@ public class CsvScenarioPlayer : MonoBehaviour
 
         string linePreview = string.IsNullOrEmpty(r.line) ? "" : (r.line.Length > 20 ? r.line.Substring(0, 20) + "..." : r.line);
 
+        // 1列目が"エンド"の場合はエンディング処理を開始
+        if (r.name == "エンド")
+        {
+            StartEnding();
+            return;
+        }
+
         // 新しい行を表示するので、一旦クリック不可にする
         NotifyClickable(false);
 
@@ -355,14 +383,64 @@ public class CsvScenarioPlayer : MonoBehaviour
                 nameTMP.text = nameToDisplay;
             }
         }
+
+        // BackgroundのImageのalpha制御
+        bool isFading = false;
+        if (backgroundImage != null)
+        {
+            string nameToCheck = name ?? "";
+            bool isMonologue = (nameToCheck == "モノローグ");
+            bool wasMonologue = (previousNameForBackground == "モノローグ");
+
+            // 既存のフェードコルーチンを停止
+            if (backgroundFadeCoroutine != null)
+            {
+                StopCoroutine(backgroundFadeCoroutine);
+                backgroundFadeCoroutine = null;
+            }
+
+            if (isMonologue)
+            {
+                // モノローグの場合：alphaを0から1にフェードイン
+                backgroundImage.enabled = true;
+                backgroundFadeCoroutine = StartCoroutine(FadeInBackgroundCoroutine());
+                isFading = true;
+            }
+            else if (wasMonologue && !isMonologue)
+            {
+                // モノローグから他の名前に変わった場合：alphaを1から0にフェードアウト
+                backgroundFadeCoroutine = StartCoroutine(FadeOutBackgroundCoroutine());
+                isFading = true;
+            }
+            else
+            {
+                // その他の場合：alphaを0に設定（非表示）
+                Color color = backgroundImage.color;
+                color.a = 0f;
+                backgroundImage.color = color;
+                backgroundImage.enabled = false;
+            }
+
+            // 前回のキャラ名を更新
+            previousNameForBackground = nameToCheck;
+        }
         
         // タイプライター効果が有効な場合はコルーチンで表示、無効な場合は即座に表示
+        // フェード中はタイプライター効果を開始しない（フェード完了後に開始）
         if (lineTMP != null)
         {
             currentFullText = line; // 全文テキストを保持
             if (enableTypewriter && !string.IsNullOrEmpty(line))
             {
-                StartTypewriter(line);
+                if (isFading)
+                {
+                    // フェード中の場合、フェード完了後にタイプライター効果を開始
+                    StartCoroutine(WaitForFadeAndStartTypewriter(line));
+                }
+                else
+                {
+                    StartTypewriter(line);
+                }
             }
             else
             {
@@ -530,6 +608,84 @@ public class CsvScenarioPlayer : MonoBehaviour
         yield return new WaitForSeconds(currentRowDelay);
         delayCoroutine = null;
         NotifyClickableIfReady();
+    }
+
+    /// <summary>
+    /// フェード完了を待機してからタイプライター効果を開始するコルーチン
+    /// </summary>
+    private IEnumerator WaitForFadeAndStartTypewriter(string fullText)
+    {
+        // フェードコルーチンが完了するまで待機
+        while (backgroundFadeCoroutine != null)
+        {
+            yield return null;
+        }
+        
+        // フェード完了後にタイプライター効果を開始
+        StartTypewriter(fullText);
+    }
+
+    /// <summary>
+    /// BackgroundのImageのalphaを0から1にフェードインするコルーチン
+    /// </summary>
+    private IEnumerator FadeInBackgroundCoroutine()
+    {
+        if (backgroundImage == null)
+        {
+            backgroundFadeCoroutine = null;
+            yield break;
+        }
+
+        float duration = 0.5f; // フェードインの時間（秒）
+        float elapsed = 0f;
+        Color color = backgroundImage.color;
+        float startAlpha = color.a;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            color.a = Mathf.Lerp(startAlpha, 1f, t);
+            backgroundImage.color = color;
+            yield return null;
+        }
+
+        // フェードイン完了後、alphaを1に設定
+        color.a = 1f;
+        backgroundImage.color = color;
+        backgroundFadeCoroutine = null;
+    }
+
+    /// <summary>
+    /// BackgroundのImageのalphaを1から0にフェードアウトするコルーチン
+    /// </summary>
+    private IEnumerator FadeOutBackgroundCoroutine()
+    {
+        if (backgroundImage == null)
+        {
+            backgroundFadeCoroutine = null;
+            yield break;
+        }
+
+        float duration = 0.5f; // フェードアウトの時間（秒）
+        float elapsed = 0f;
+        Color color = backgroundImage.color;
+        float startAlpha = color.a;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            color.a = Mathf.Lerp(startAlpha, 0f, t);
+            backgroundImage.color = color;
+            yield return null;
+        }
+
+        // フェードアウト完了後、alphaを0に設定して非表示にする
+        color.a = 0f;
+        backgroundImage.color = color;
+        backgroundImage.enabled = false;
+        backgroundFadeCoroutine = null;
     }
 
     /// <summary>
@@ -724,6 +880,7 @@ public class CsvScenarioPlayer : MonoBehaviour
     /// <summary>
     /// choice1が選択されたときに呼び出す（ButtonのOnClickから呼び出す想定）
     /// クリック禁止行が見つかるまで（空行も含めて）スキップし、そのクリック禁止行の次の行から表示を開始する
+    /// ただし、現在の行がクリック禁止行の場合は、スキップせずに単純に次の行から表示する
     /// </summary>
     public void OnChoice1Selected()
     {
@@ -744,6 +901,20 @@ public class CsvScenarioPlayer : MonoBehaviour
         {
             StopCoroutine(delayCoroutine);
             delayCoroutine = null;
+        }
+
+        // 現在の行がクリック禁止行の場合、スキップせずに単純に次の行から表示する
+        if (rows[index].disableClick)
+        {
+            // 次の行へ進む
+            index++;
+            if (index >= rows.Count)
+            {
+                return;
+            }
+
+            ShowCurrentRow();
+            return;
         }
 
         // 次の行へ進む
@@ -799,4 +970,59 @@ public class CsvScenarioPlayer : MonoBehaviour
             Debug.LogWarning("[CsvScenarioPlayer] TransitionControllerが取得できませんでした。");
         }
     }
+
+    /// <summary>
+    /// エンディング処理を開始する
+    /// </summary>
+    private void StartEnding()
+    {
+        if (endingImageSwitcher == null)
+        {
+            Debug.LogWarning("[CsvScenarioPlayer] endingImageSwitcherが設定されていません。エンディングを開始できません。");
+            return;
+        }
+
+        // エンディング中フラグを設定
+        isInEnding = true;
+
+        // タイプライター効果を停止
+        StopTypewriter();
+
+        // 間隔待機を停止
+        if (delayCoroutine != null)
+        {
+            StopCoroutine(delayCoroutine);
+            delayCoroutine = null;
+        }
+
+        // テロップパネルを非表示にする
+        if (telopPanel != null)
+        {
+            telopPanel.SetActive(false);
+        }
+
+        // 名前とセリフをクリア
+        if (nameTMP != null) nameTMP.text = "";
+        if (lineTMP != null) lineTMP.text = "";
+
+        // Backgroundを非表示にする
+        if (backgroundImage != null)
+        {
+            Color color = backgroundImage.color;
+            color.a = 0f;
+            backgroundImage.color = color;
+            backgroundImage.enabled = false;
+        }
+
+        // 選択肢を非表示にする
+        if (choice1 != null) choice1.SetActive(false);
+        if (choice2 != null) choice2.SetActive(false);
+
+        // クリッカブルマークを非表示にする
+        NotifyClickable(false);
+
+        // EndingImageSwitcherを開始
+        endingImageSwitcher.StartEnding();
+    }
+
 }

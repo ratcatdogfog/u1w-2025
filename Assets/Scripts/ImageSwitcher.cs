@@ -219,18 +219,14 @@ public class ImageSwitcher : MonoBehaviour
 
     /// <summary>
     /// 最初の画像切り替え時の処理（SceneTransitionでフェードイン演出を開始）
-    /// mainMenuToGameTransitionを使用し、もともと黒(1)だったものから0へと変化させる
+    /// GameUIManagerに移譲
     /// </summary>
     private void HandleFirstSwitch()
     {
         hasPerformedFirstSwitch = true;
         
-        TransitionController transition = gameUIManager?.GetMainTransition();
-        if (transition != null)
-        {
-            // SceneTransitionで1→0への遷移を実行（もともと黒だったものから0へ）
-            transition.PlayToBlack();
-        }
+        // GameUIManagerに移譲
+        gameUIManager?.PlayFirstImageFadeIn();
 
         // クリッカブル状態の更新は、Update()内でクールダウンが完了した時に行う
         // （最初の画像表示時はクールダウンが完了するまでクリッカブルマークを表示しない）
@@ -293,36 +289,24 @@ public class ImageSwitcher : MonoBehaviour
 
     /// <summary>
     /// 画面遷移を実行し、完了後にtargetPanelを非アクティブにする
-    /// テロップ用UIは画面遷移開始前に表示する（TransitionControllerのGameObjectが非アクティブにならないように注意）
-    /// illustrationPanelTransitionを使用し、1→0への遷移を実行
+    /// GameUIManagerに移譲
     /// </summary>
     private void ExecuteTransition()
     {
-        TransitionController transition = gameUIManager?.GetIllustrationPanelTransition();
-        if (transition != null)
+        if (gameUIManager == null)
         {
-            // TransitionControllerのGameObjectがアクティブであることを確認
-            if (!transition.gameObject.activeInHierarchy)
-            {
-                transition.gameObject.SetActive(true);
-            }
-            
-            // 画面遷移開始前にテロップ用UIを表示
-            ShowTelopPanel();
-            
-            transition.PlayToBlack(() =>
-            {
-                DeactivateTargetPanel();
-                onTransitionCompleted?.Invoke();
-            });
-        }
-        else
-        {
-            // TransitionControllerが設定されていない場合は即座に非アクティブ化
-            ShowTelopPanel();
+            // GameUIManagerが設定されていない場合は即座に非アクティブ化
             DeactivateTargetPanel();
             onTransitionCompleted?.Invoke();
+            return;
         }
+
+        // GameUIManagerに移譲（_Progressを1に設定して暗転からスタートする処理も含まれる）
+        gameUIManager.PlayIllustrationPanelTransition(() =>
+        {
+            DeactivateTargetPanel();
+            onTransitionCompleted?.Invoke();
+        });
     }
 
     /// <summary>
@@ -331,14 +315,6 @@ public class ImageSwitcher : MonoBehaviour
     private void DeactivateTargetPanel()
     {
         targetPanel?.SetActive(false);
-    }
-
-    /// <summary>
-    /// テロップ用UIを表示する
-    /// </summary>
-    private void ShowTelopPanel()
-    {
-        gameUIManager?.ShowTelopPanel();
     }
 
 
