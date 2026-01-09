@@ -10,6 +10,13 @@ public class CsvScenarioPlayer : MonoBehaviour
 {
     [Header("CSV (TextAsset) をInspectorで割り当て")]
     [SerializeField] private TextAsset csvFile;
+    [SerializeField] private TextAsset[] alternativeCsvFiles; // choice2の選択回数に応じて使用する代替CSVファイル（配列のインデックスが選択回数に対応）
+    
+    [Header("CSV Branch Settings")]
+    [SerializeField] private bool useAlternativeCsvForZeroChoice2 = true; // choice2が0回のときも代替CSVを使うかどうか（trueの場合、0回と1回は同じ分岐）
+    [SerializeField] private int csvIndexForZeroChoice2 = 0; // choice2が0回のときに使用するalternativeCsvFilesのインデックス
+    [SerializeField] private int csvIndexForOneChoice2 = 0; // choice2が1回のときに使用するalternativeCsvFilesのインデックス
+    [SerializeField] private int csvIndexForTwoChoice2 = 1; // choice2が2回のときに使用するalternativeCsvFilesのインデックス
 
     [Header("出力先")]
     [SerializeField] private TMP_Text nameTMP;   // 1列目
@@ -34,6 +41,7 @@ public class CsvScenarioPlayer : MonoBehaviour
     [SerializeField] private TMPHoverColor lineTMPHoverColor;        // セリフテキストのホバー検知用（未設定の場合は自動取得）
     [SerializeField] private GameUIManager gameUIManager;           // GameUIManagerへの参照（明転用）
     [SerializeField] private Image backgroundImage;                 // UIのBackgroundのImage（モノローグ時に表示）
+    [SerializeField] private IaiReactionGame iaiReactionGame;        // IaiReactionGameへの参照（choice2用）
     
     [Header("選択肢")]
     [SerializeField] private GameObject choice1;                     // 選択肢1のオブジェクト
@@ -56,8 +64,12 @@ public class CsvScenarioPlayer : MonoBehaviour
     private string currentFullText = "";                             // 現在表示中の全文テキスト
     private bool wasTelopPanelActive = false;                        // 前回のtelopPanelのアクティブ状態
     private bool wasTypewriting = false;                              // 前回のタイプライター状態
-    private string previousNameForBackground = "";                    // Background制御用の前回のキャラ名
+    private bool previousFadeBackground = false;                      // Background制御用の前回の暗転状態
     private bool isInEnding = false;                                  // エンディング中かどうか
+    private bool hasTransitionCompleted = false;                     // 画面遷移が完了したかどうか
+    private int choice1Count = 0;                                     // choice1を選択した回数
+    private int choice2Count = 0;                                     // choice2を選択した回数
+    private bool isProcessingChoice = false;                          // 選択肢処理中かどうか（重複実行防止用）
 
     [Serializable]
     private class Row
@@ -68,6 +80,7 @@ public class CsvScenarioPlayer : MonoBehaviour
         public float delay;           // 次の文章への間隔指定（秒数）
         public string action;         // 備考
         public bool disableClick;     // クリック禁止
+        public bool fadeBackground;   // 暗転するか否か（1なら暗転、それ以外なら開ける）
     }
 
     private void Awake()
@@ -122,8 +135,18 @@ public class CsvScenarioPlayer : MonoBehaviour
         index = 0;
         lastName = "";
         lastDelay = 0f;
-        previousNameForBackground = "";
+        previousFadeBackground = false;
         isInitialized = true;
+        
+        // autoStartがtrueの場合、またはimageSwitcherが設定されていない場合は画面遷移完了とみなす
+        if (autoStart || imageSwitcher == null)
+        {
+            hasTransitionCompleted = true;
+        }
+        else
+        {
+            hasTransitionCompleted = false;
+        }
 
         // autoStartがtrueの場合のみ最初の表示を行う
         if (autoStart)
@@ -217,6 +240,19 @@ public class CsvScenarioPlayer : MonoBehaviour
                 return;
             }
             
+            // ImageSwitcherが画面遷移中（暗転中）の場合はクリック処理をスキップ
+            // ただし、画面遷移が完了している場合はチェックをスキップ（targetPanelは非アクティブのまま）
+            if (!hasTransitionCompleted && imageSwitcher != null && !imageSwitcher.IsPanelActive())
+            {
+                return;
+            }
+            
+            // Backgroundのフェード中（モノローグ時など）の場合はクリック処理をスキップ
+            if (backgroundFadeCoroutine != null)
+            {
+                return;
+            }
+            
             // TMPにホバー中の場合、クリック処理をスキップ
             if (IsAnyTMPHovering())
             {
@@ -245,7 +281,9 @@ public class CsvScenarioPlayer : MonoBehaviour
             // クリック可能な条件をチェック（NotifyClickableIfReadyと同じ条件）
             bool telopActive = telopPanel != null && telopPanel.activeSelf;
             bool hasNextRow = index < rows.Count - 1;
-            bool canProceed = telopActive && !isTypewriting && hasNextRow;
+            bool isWaitingDelay = delayCoroutine != null;
+            bool isClickDisabled = index < rows.Count && rows[index].disableClick;
+            bool canProceed = telopActive && !isTypewriting && hasNextRow && !isWaitingDelay && !isClickDisabled;
 
             if (!canProceed)
             {
@@ -264,6 +302,19 @@ public class CsvScenarioPlayer : MonoBehaviour
         // 従来のキーボード操作（telopPanelが非アクティブまたは未設定の場合も有効）
         if (Input.GetKeyDown(nextKey))
         {
+            // ImageSwitcherが画面遷移中（暗転中）の場合はキー入力をスキップ
+            // ただし、画面遷移が完了している場合はチェックをスキップ（targetPanelは非アクティブのまま）
+            if (!hasTransitionCompleted && imageSwitcher != null && !imageSwitcher.IsPanelActive())
+            {
+                return;
+            }
+            
+            // Backgroundのフェード中（モノローグ時など）の場合はキー入力をスキップ
+            if (backgroundFadeCoroutine != null)
+            {
+                return;
+            }
+            
             // タイプライター効果中の場合、即座に全文を表示
             if (isTypewriting)
             {
@@ -282,6 +333,7 @@ public class CsvScenarioPlayer : MonoBehaviour
             {
                 return;
             }
+
             index++;
             if (index >= rows.Count)
             {
@@ -298,9 +350,11 @@ public class CsvScenarioPlayer : MonoBehaviour
     {
         if (!isInitialized)
         {
-            Debug.LogWarning("[CsvScenarioPlayer] 初期化が完了していません。");
             return;
         }
+
+        // 画面遷移完了フラグを設定
+        hasTransitionCompleted = true;
 
         // 最初の行を表示
         index = 0;
@@ -309,6 +363,12 @@ public class CsvScenarioPlayer : MonoBehaviour
 
     private void ShowCurrentRow()
     {
+        // indexの範囲チェック
+        if (index < 0 || index >= rows.Count)
+        {
+            return;
+        }
+
         var r = rows[index];
 
         string linePreview = string.IsNullOrEmpty(r.line) ? "" : (r.line.Length > 20 ? r.line.Substring(0, 20) + "..." : r.line);
@@ -388,9 +448,8 @@ public class CsvScenarioPlayer : MonoBehaviour
         bool isFading = false;
         if (backgroundImage != null)
         {
-            string nameToCheck = name ?? "";
-            bool isMonologue = (nameToCheck == "モノローグ");
-            bool wasMonologue = (previousNameForBackground == "モノローグ");
+            bool shouldFade = r.fadeBackground;
+            bool wasFading = previousFadeBackground;
 
             // 既存のフェードコルーチンを停止
             if (backgroundFadeCoroutine != null)
@@ -399,30 +458,39 @@ public class CsvScenarioPlayer : MonoBehaviour
                 backgroundFadeCoroutine = null;
             }
 
-            if (isMonologue)
+            if (shouldFade)
             {
-                // モノローグの場合：alphaを0から1にフェードイン
-                backgroundImage.enabled = true;
-                backgroundFadeCoroutine = StartCoroutine(FadeInBackgroundCoroutine());
-                isFading = true;
-            }
-            else if (wasMonologue && !isMonologue)
-            {
-                // モノローグから他の名前に変わった場合：alphaを1から0にフェードアウト
-                backgroundFadeCoroutine = StartCoroutine(FadeOutBackgroundCoroutine());
-                isFading = true;
+                // 暗転する場合：alphaを0から1にフェードイン（既に暗転中なら維持）
+                if (!wasFading)
+                {
+                    // 前回が暗転していない場合のみフェードイン
+                    backgroundImage.enabled = true;
+                    backgroundFadeCoroutine = StartCoroutine(FadeInBackgroundCoroutine());
+                    isFading = true;
+                }
+                // 既に暗転中（wasFading == true）の場合は何もしない（維持）
             }
             else
             {
-                // その他の場合：alphaを0に設定（非表示）
-                Color color = backgroundImage.color;
-                color.a = 0f;
-                backgroundImage.color = color;
-                backgroundImage.enabled = false;
+                // 暗転を開ける場合：alphaを1から0にフェードアウト
+                if (wasFading)
+                {
+                    // 前回が暗転中だった場合のみフェードアウト
+                    backgroundFadeCoroutine = StartCoroutine(FadeOutBackgroundCoroutine());
+                    isFading = true;
+                }
+                else
+                {
+                    // 既に開いている場合はalphaを0に設定（非表示を維持）
+                    Color color = backgroundImage.color;
+                    color.a = 0f;
+                    backgroundImage.color = color;
+                    backgroundImage.enabled = false;
+                }
             }
 
-            // 前回のキャラ名を更新
-            previousNameForBackground = nameToCheck;
+            // 前回の暗転状態を更新
+            previousFadeBackground = shouldFade;
         }
         
         // タイプライター効果が有効な場合はコルーチンで表示、無効な場合は即座に表示
@@ -763,7 +831,7 @@ public class CsvScenarioPlayer : MonoBehaviour
         row.Add(cell.ToString());
         table.Add(row);
 
-            // 6列に整形して Row 化
+            // 7列に整形して Row 化
         var result = new List<Row>(table.Count);
         float lastDelayValue = 0f; // 最後に指定された間隔を保持
         
@@ -775,6 +843,7 @@ public class CsvScenarioPlayer : MonoBehaviour
             string c3 = r.Count > 3 ? r[3] : "";  // 間隔指定
             string c4 = r.Count > 4 ? r[4] : "";  // 備考
             string c5 = r.Count > 5 ? r[5] : "";  // クリック禁止
+            string c6 = r.Count > 6 ? r[6] : "";  // 暗転制御
 
             // 末尾の余計な空白だけ軽く整える
             c0 = c0?.Trim();
@@ -810,6 +879,13 @@ public class CsvScenarioPlayer : MonoBehaviour
                 disableClick = c5.Trim() == "1";
             }
 
+            // 暗転制御の判定：記載なしまたは1以外はfalse、1はtrue
+            bool fadeBackground = false;
+            if (!string.IsNullOrWhiteSpace(c6))
+            {
+                fadeBackground = c6.Trim() == "1";
+            }
+
             result.Add(new Row 
             { 
                 name = c0, 
@@ -817,7 +893,8 @@ public class CsvScenarioPlayer : MonoBehaviour
                 showChoices = showChoices,
                 delay = delay,
                 action = c4,
-                disableClick = disableClick
+                disableClick = disableClick,
+                fadeBackground = fadeBackground
             });
         }
 
@@ -884,9 +961,23 @@ public class CsvScenarioPlayer : MonoBehaviour
     /// </summary>
     public void OnChoice1Selected()
     {
+        // 重複実行を防ぐ
+        if (isProcessingChoice)
+        {
+            return;
+        }
+
         if (!isInitialized || index < 0 || index >= rows.Count)
         {
             return;
+        }
+
+        isProcessingChoice = true;
+
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
         }
 
         // 選択肢を非表示にする
@@ -910,10 +1001,12 @@ public class CsvScenarioPlayer : MonoBehaviour
             index++;
             if (index >= rows.Count)
             {
+                isProcessingChoice = false;
                 return;
             }
 
             ShowCurrentRow();
+            isProcessingChoice = false;
             return;
         }
 
@@ -921,6 +1014,7 @@ public class CsvScenarioPlayer : MonoBehaviour
         index++;
         if (index >= rows.Count)
         {
+            isProcessingChoice = false;
             return;
         }
 
@@ -939,10 +1033,239 @@ public class CsvScenarioPlayer : MonoBehaviour
         // 表示開始行が存在するか確認
         if (index >= rows.Count)
         {
+            isProcessingChoice = false;
+            return;
+        }
+
+        // choice1の選択回数をカウント
+        choice1Count++;
+
+        // 総和が3になったタイミングでCSVとエンディング画像を切り替えるか判定
+        CheckAndSwitchCsvIfNeeded();
+
+        // CSV切り替え後、indexが範囲外になっている可能性があるため再チェック
+        if (index >= rows.Count)
+        {
+            isProcessingChoice = false;
             return;
         }
 
         ShowCurrentRow();
+        isProcessingChoice = false;
+    }
+
+    /// <summary>
+    /// choice2が選択されたときに呼び出す（ButtonのOnClickから呼び出す想定）
+    /// 居合ゲームをスキップして終了処理（暗転、敵キャラの入れ替えなど）のみを実行し、
+    /// クリック禁止行が見つかるまで（空行も含めて）スキップし、そのクリック禁止行の次の行から表示を開始する
+    /// ただし、現在の行がクリック禁止行の場合は、スキップせずに単純に次の行から表示する
+    /// </summary>
+    public void OnChoice2Selected()
+    {
+        // 重複実行を防ぐ
+        if (isProcessingChoice)
+        {
+            return;
+        }
+
+        if (!isInitialized || index < 0 || index >= rows.Count)
+        {
+            return;
+        }
+
+        isProcessingChoice = true;
+
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
+        // 選択肢を非表示にする
+        if (choice1 != null) choice1.SetActive(false);
+        if (choice2 != null) choice2.SetActive(false);
+
+        // タイプライター効果を停止
+        StopTypewriter();
+
+        // 間隔待機を停止
+        if (delayCoroutine != null)
+        {
+            StopCoroutine(delayCoroutine);
+            delayCoroutine = null;
+        }
+
+        // 現在の行がクリック禁止行の場合、スキップせずに単純に次の行から表示する
+        if (rows[index].disableClick)
+        {
+            // 次の行へ進む
+            index++;
+            if (index >= rows.Count)
+            {
+                isProcessingChoice = false;
+                return;
+            }
+
+        // choice2の選択回数をカウント
+        choice2Count++;
+
+        // IaiReactionGameが設定されている場合、居合ゲームをスキップして終了処理のみを実行
+        if (iaiReactionGame != null)
+        {
+            iaiReactionGame.SkipGameAndPlayTransition();
+        }
+
+        // 総和が3になったタイミングでCSVとエンディング画像を切り替えるか判定
+        CheckAndSwitchCsvIfNeeded();
+
+        // CSV切り替え後、indexが範囲外になっている可能性があるため再チェック
+        if (index >= rows.Count)
+        {
+            isProcessingChoice = false;
+            return;
+        }
+
+        ShowCurrentRow();
+        isProcessingChoice = false;
+        return;
+        }
+
+        // 次の行へ進む
+        index++;
+        if (index >= rows.Count)
+        {
+            isProcessingChoice = false;
+            return;
+        }
+
+        // クリック禁止行が見つかるまでスキップ（空行も含めて）
+        while (index < rows.Count && !rows[index].disableClick)
+        {
+            index++;
+        }
+
+        // クリック禁止行が見つかった場合、その次の行へ進む
+        if (index < rows.Count && rows[index].disableClick)
+        {
+            index++;
+        }
+
+        // 表示開始行が存在するか確認
+        if (index >= rows.Count)
+        {
+            isProcessingChoice = false;
+            return;
+        }
+
+        // choice2の選択回数をカウント
+        choice2Count++;
+
+        // IaiReactionGameが設定されている場合、居合ゲームをスキップして終了処理のみを実行
+        if (iaiReactionGame != null)
+        {
+            iaiReactionGame.SkipGameAndPlayTransition();
+        }
+
+        // 総和が3になったタイミングでCSVとエンディング画像を切り替えるか判定
+        CheckAndSwitchCsvIfNeeded();
+
+        // CSV切り替え後、indexが範囲外になっている可能性があるため再チェック
+        if (index >= rows.Count)
+        {
+            isProcessingChoice = false;
+            return;
+        }
+
+        ShowCurrentRow();
+        isProcessingChoice = false;
+    }
+
+    /// <summary>
+    /// choice1とchoice2の選択回数の総和が3になったタイミングで、choice2の選択回数に応じてCSVを切り替えるか判定する
+    /// Inspectorで設定された条件に応じてCSVを切り替える
+    /// </summary>
+    /// <returns>CSVが切り替えられた場合はtrue、そうでない場合はfalse</returns>
+    private bool CheckAndSwitchCsvIfNeeded()
+    {
+        // 総和が3になったタイミングで判定
+        int totalChoices = choice1Count + choice2Count;
+        if (totalChoices != 3)
+        {
+            return false;
+        }
+
+        // choice2が0回、1回、または2回のときCSVを切り替える（Inspectorで設定された条件に応じて）
+        if (choice2Count == 0 && useAlternativeCsvForZeroChoice2)
+        {
+            return SwitchCsvIfNeeded();
+        }
+        else if (choice2Count == 1 || choice2Count == 2)
+        {
+            return SwitchCsvIfNeeded();
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// choice2の選択回数に応じてCSVを切り替える
+    /// Inspectorで設定されたcsvIndexを使用して分岐する
+    /// </summary>
+    /// <returns>CSVが切り替えられた場合はtrue、そうでない場合はfalse</returns>
+    private bool SwitchCsvIfNeeded()
+    {
+        // alternativeCsvFilesが設定されていない場合は何もしない
+        if (alternativeCsvFiles == null || alternativeCsvFiles.Length == 0)
+        {
+            return false;
+        }
+
+        // choice2Countに応じて使用するcsvIndexを決定
+        int csvIndex;
+        if (choice2Count == 0)
+        {
+            csvIndex = csvIndexForZeroChoice2;
+        }
+        else if (choice2Count == 1)
+        {
+            csvIndex = csvIndexForOneChoice2;
+        }
+        else if (choice2Count == 2)
+        {
+            csvIndex = csvIndexForTwoChoice2;
+        }
+        else
+        {
+            // choice2が3回以上の場合は切り替えない
+            return false;
+        }
+
+        // csvIndexが有効な範囲内かチェック
+        if (csvIndex >= 0 && csvIndex < alternativeCsvFiles.Length)
+        {
+            TextAsset newCsvFile = alternativeCsvFiles[csvIndex];
+            if (newCsvFile != null && newCsvFile != csvFile)
+            {
+                // CSVファイルを切り替え
+                csvFile = newCsvFile;
+                
+                // 新しいCSVを読み込む
+                rows.Clear();
+                rows.AddRange(ParseCsv(csvFile.text));
+                
+                // 先頭行がヘッダなら捨てる
+                if (rows.Count > 0 && rows[0].name == "キャラクター名" && rows[0].line == "セリフ")
+                    rows.RemoveAt(0);
+                
+                // CSVを切り替えた場合は、indexを0にリセットして新しいCSVでスキップ処理を行う
+                index = 0;
+                
+                Debug.Log($"[CsvScenarioPlayer] choice2の選択回数 {choice2Count} に応じてCSVを切り替えました（csvIndex={csvIndex}）。");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1021,8 +1344,12 @@ public class CsvScenarioPlayer : MonoBehaviour
         // クリッカブルマークを非表示にする
         NotifyClickable(false);
 
-        // EndingImageSwitcherを開始
-        endingImageSwitcher.StartEnding();
+        // EndingImageSwitcherを開始（choice2の選択回数を渡す）
+        // choice2が0回または1回のときは同じ分岐（alternativeEndingSprites[0]）を使用
+        // choice2が2回のときはalternativeEndingSprites[1]を使用
+        // そのため、choice2Countをそのまま渡す（0, 1, 2のいずれか）
+        Debug.Log($"[CsvScenarioPlayer] エンディング開始: choice2Count={choice2Count}");
+        endingImageSwitcher.StartEnding(choice2Count);
     }
 
 }

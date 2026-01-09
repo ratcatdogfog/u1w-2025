@@ -198,6 +198,12 @@ public class ImageSwitcher : MonoBehaviour
     /// </summary>
     private void SwitchImageInternal()
     {
+        // クリッカブルな状態でクリックしたので、クリッカブルクリックSEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayClickableClickSE();
+        }
+
         // 最後のSprite表示中に再度クリックされた場合は画面遷移を実行
         if (IsLastSprite())
         {

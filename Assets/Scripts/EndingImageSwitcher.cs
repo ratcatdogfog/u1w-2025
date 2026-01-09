@@ -8,10 +8,23 @@ using UnityEngine.UI;
 /// </summary>
 public class EndingImageSwitcher : MonoBehaviour
 {
+    [System.Serializable]
+    private class EndingSpriteSet
+    {
+        public Sprite[] sprites;
+    }
+
     [Header("Image Settings")]
     [SerializeField] private Image targetImage;
     [SerializeField] private Sprite[] endingSprites;
+    [SerializeField] private EndingSpriteSet[] alternativeEndingSprites; // choice2の選択回数に応じて使用する代替エンディング画像（配列のインデックスが選択回数に対応）
     [SerializeField] private GameObject endingImagePanel; // エンディング画像を表示するパネル（未設定の場合はtargetImageのGameObjectを使用）
+    
+    [Header("Ending Branch Settings")]
+    [SerializeField] private bool useAlternativeEndingForZeroChoice2 = true; // choice2が0回のときも代替画像を使うかどうか（trueの場合、0回と1回は同じ分岐）
+    [SerializeField] private int spriteIndexForZeroChoice2 = 0; // choice2が0回のときに使用するalternativeEndingSpritesのインデックス
+    [SerializeField] private int spriteIndexForOneChoice2 = 0; // choice2が1回のときに使用するalternativeEndingSpritesのインデックス
+    [SerializeField] private int spriteIndexForTwoChoice2 = 1; // choice2が2回のときに使用するalternativeEndingSpritesのインデックス
     
     [Header("UI Manager")]
     [SerializeField] private GameUIManager gameUIManager; // 最初の画面へ戻るための参照
@@ -29,6 +42,7 @@ public class EndingImageSwitcher : MonoBehaviour
     private float switchImageCooldownElapsed = 0f; // SwitchImage()のクールダウン経過時間（秒）
     private bool wasCanSwitchImage = false; // 前回のcanSwitchImageの値
     private bool isActive = false; // エンディングがアクティブかどうか
+    private Sprite[] currentEndingSprites; // 現在使用中のエンディング画像配列
 
     private void Awake()
     {
@@ -92,13 +106,20 @@ public class EndingImageSwitcher : MonoBehaviour
     /// <summary>
     /// エンディングを開始する
     /// </summary>
-    public void StartEnding()
+    /// <param name="choice2Count">choice2の選択回数（0または1のときはalternativeEndingSprites[0]、2のときはalternativeEndingSprites[1]を使用）</param>
+    public void StartEnding(int choice2Count = 0)
     {
-        if (endingSprites == null || endingSprites.Length == 0 || targetImage == null)
+        // choice2の選択回数に応じて使用するエンディング画像を決定
+        Sprite[] spritesToUse = GetEndingSpritesForChoice2Count(choice2Count);
+        
+        if (spritesToUse == null || spritesToUse.Length == 0 || targetImage == null)
         {
             Debug.LogError("[EndingImageSwitcher] endingSpritesまたはtargetImageが設定されていません。", this);
             return;
         }
+
+        // 現在使用中のエンディング画像を保存
+        currentEndingSprites = spritesToUse;
 
         // 既存のフェードインコルーチンを停止
         if (fadeInCoroutine != null)
@@ -116,7 +137,7 @@ public class EndingImageSwitcher : MonoBehaviour
 
         isActive = true;
         currentSpriteIndex = 0;
-        targetImage.sprite = endingSprites[currentSpriteIndex];
+        targetImage.sprite = currentEndingSprites[currentSpriteIndex];
         
         // targetImageのalphaを0に設定（フェードイン開始前）
         Color color = targetImage.color;
@@ -134,6 +155,64 @@ public class EndingImageSwitcher : MonoBehaviour
 
         // フェードインを開始
         fadeInCoroutine = StartCoroutine(FadeInImageCoroutine());
+    }
+
+    /// <summary>
+    /// choice2の選択回数に応じて使用するエンディング画像を取得する
+    /// Inspectorで設定されたspriteIndexを使用して分岐する
+    /// </summary>
+    /// <param name="choice2Count">choice2の選択回数</param>
+    /// <returns>使用するエンディング画像配列</returns>
+    private Sprite[] GetEndingSpritesForChoice2Count(int choice2Count)
+    {
+        // alternativeEndingSpritesが設定されていない場合はデフォルトを使用
+        if (alternativeEndingSprites == null || alternativeEndingSprites.Length == 0)
+        {
+            return endingSprites;
+        }
+
+        // choice2Countに応じて使用するspriteIndexを決定
+        int spriteIndex;
+        if (choice2Count == 0)
+        {
+            // choice2が0回のときの処理
+            if (useAlternativeEndingForZeroChoice2)
+            {
+                spriteIndex = spriteIndexForZeroChoice2;
+            }
+            else
+            {
+                // 代替画像を使わない場合はデフォルトを使用
+                return endingSprites;
+            }
+        }
+        else if (choice2Count == 1)
+        {
+            spriteIndex = spriteIndexForOneChoice2;
+        }
+        else if (choice2Count == 2)
+        {
+            spriteIndex = spriteIndexForTwoChoice2;
+        }
+        else
+        {
+            // choice2が3回以上の場合はデフォルトを使用
+            return endingSprites;
+        }
+
+        // spriteIndexが有効な範囲内かチェック
+        if (spriteIndex >= 0 && spriteIndex < alternativeEndingSprites.Length)
+        {
+            EndingSpriteSet spriteSet = alternativeEndingSprites[spriteIndex];
+            if (spriteSet != null && spriteSet.sprites != null && spriteSet.sprites.Length > 0)
+            {
+                Debug.Log($"[EndingImageSwitcher] choice2の選択回数 {choice2Count} に応じてエンディング画像を変更しました（spriteIndex={spriteIndex}）。");
+                return spriteSet.sprites;
+            }
+        }
+
+        // 代替画像が設定されていない場合はデフォルトを使用
+        return endingSprites;
     }
 
     /// <summary>
@@ -179,6 +258,12 @@ public class EndingImageSwitcher : MonoBehaviour
     {
         if (!ValidateSprites()) return;
 
+        // クリッカブルな状態でクリックしたので、クリッカブルクリックSEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayClickableClickSE();
+        }
+
         // 最後のSprite表示中に再度クリックされた場合は最初の画面へ戻る
         if (IsLastSprite())
         {
@@ -195,7 +280,7 @@ public class EndingImageSwitcher : MonoBehaviour
 
     private bool ValidateSprites()
     {
-        return endingSprites != null && endingSprites.Length > 0;
+        return currentEndingSprites != null && currentEndingSprites.Length > 0;
     }
 
     /// <summary>
@@ -203,7 +288,7 @@ public class EndingImageSwitcher : MonoBehaviour
     /// </summary>
     private bool IsLastSprite()
     {
-        return currentSpriteIndex == endingSprites.Length - 1;
+        return currentEndingSprites != null && currentSpriteIndex == currentEndingSprites.Length - 1;
     }
 
     /// <summary>
@@ -231,9 +316,9 @@ public class EndingImageSwitcher : MonoBehaviour
     private void SwitchToNextSprite()
     {
         currentSpriteIndex++;
-        if (targetImage != null && currentSpriteIndex < endingSprites.Length)
+        if (targetImage != null && currentEndingSprites != null && currentSpriteIndex < currentEndingSprites.Length)
         {
-            targetImage.sprite = endingSprites[currentSpriteIndex];
+            targetImage.sprite = currentEndingSprites[currentSpriteIndex];
         }
 
         // 画像切り替え直後は一旦非表示にして、指定秒数後に表示する

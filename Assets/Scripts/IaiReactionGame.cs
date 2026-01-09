@@ -10,11 +10,13 @@ using UnityEngine.UI;
 public class IaiReactionGame : MonoBehaviour
 {
     [Header("アバター設定")]
-    [SerializeField] private GameObject playerAvatar;      // プレイヤーのアバター
+    [SerializeField] private GameObject playerAvatar;      // プレイヤーのアバター（最初のキャラ、シーンに配置）
+    [SerializeField] private GameObject playerAvatarReplacement;   // プレイヤーのアバター（二回目以降の差し替え用、シーンに配置して非表示にしておく）
     [SerializeField] private GameObject[] enemyAvatars;   // 敵のアバター（順番に使用）
     
     [Header("アニメーター設定")]
-    [SerializeField] private Animator playerAnimator;      // プレイヤーのアニメーター
+    [SerializeField] private Animator playerAnimator;      // プレイヤーのアニメーター（最初のキャラ）
+    [SerializeField] private Animator playerAnimatorReplacement;   // プレイヤーのアニメーター（二回目以降の差し替え用）
     [SerializeField] private Animator[] enemyAnimators;    // 敵のアニメーター（順番に使用）
     
     [Header("エフェクト設定")]
@@ -24,7 +26,6 @@ public class IaiReactionGame : MonoBehaviour
     
     [Header("ゲーム設定")]
     [SerializeField] private float successThreshold = 0.5f; // 成功判定の反応速度閾値（秒）
-    [SerializeField] private float roundInterval = 1.5f;    // ラウンド間のインターバル（秒）
     [SerializeField] private float clickTimeout = 2.0f;     // クリック制限時間（秒）
     [SerializeField] private bool alwaysWin = false;            // 必勝モード（ONの場合は常に勝利）
     
@@ -39,10 +40,21 @@ public class IaiReactionGame : MonoBehaviour
     [SerializeField] private Image flashImage;             // 画面全体のフラッシュ用画像（白）
     [SerializeField] private float flashDuration = 0.1f;   // フラッシュの表示時間（秒）
     
+    [Header("フラッシュ後の位置・角度設定（ローカル座標）")]
+    [SerializeField] private Vector3 playerPositionAfterFlash;  // フラッシュ後のプレイヤー位置（ローカル座標）
+    [SerializeField] private Vector3 playerRotationAfterFlash;  // フラッシュ後のプレイヤー角度（ローカル座標、Euler角）
+    [SerializeField] private Vector3[] enemyPositionsAfterFlash;   // フラッシュ後の敵位置（ローカル座標、各敵キャラごと）
+    [SerializeField] private Vector3[] enemyRotationsAfterFlash;  // フラッシュ後の敵角度（ローカル座標、Euler角、各敵キャラごと）
+    
     [Header("音效設定")]
     [SerializeField] private AudioClip iaiStartSE;         // 居合開始時のSE
     [SerializeField] private AudioClip effectSE;          // エフェクト表示時のSE
     [SerializeField] private AudioClip flashSE;            // フラッシュ発生時のSE
+    
+    [Header("SE音量設定（0.0～1.0）")]
+    [Range(0f, 1f)] [SerializeField] private float iaiStartSEVolume = 1.0f;  // 居合開始時SEの音量
+    [Range(0f, 1f)] [SerializeField] private float effectSEVolume = 1.0f;    // エフェクト表示時SEの音量
+    [Range(0f, 1f)] [SerializeField] private float flashSEVolume = 1.0f;     // フラッシュ発生時SEの音量
     
     [Header("アニメーション設定")]
     private const string idleTrigger = "Idle";           // 待機モーションのトリガー名
@@ -55,10 +67,21 @@ public class IaiReactionGame : MonoBehaviour
     private float effectShowTime = 0f;                     // エフェクトが表示された時刻
     private Coroutine gameCoroutine = null;                // ゲームループ用コルーチン
     private Coroutine resultCoroutine = null;              // 結果処理用コルーチン
+    private Coroutine endTransitionCoroutine = null;       // 終了トランジション用コルーチン
     private bool roundSuccess = false;                     // ラウンドが成功したかどうか
     private int currentRound = 0;                          // 現在の勝負回数
+    private GameObject currentPlayerAvatar;                 // 現在使用中のプレイヤーアバター
+    private Animator currentPlayerAnimator;                 // 現在使用中のプレイヤーアニメーター
     private GameObject currentEnemyAvatar;                 // 現在使用中の敵アバター
     private Animator currentEnemyAnimator;                 // 現在使用中の敵アニメーター
+    
+    // 初期位置・角度の保存用
+    private Vector3 initialPlayerPosition;                 // プレイヤーの初期位置（最初のキャラ）
+    private Quaternion initialPlayerRotation;               // プレイヤーの初期角度（最初のキャラ）
+    private Vector3 initialPlayerReplacementPosition;       // プレイヤーの初期位置（差し替え用キャラ）
+    private Quaternion initialPlayerReplacementRotation;     // プレイヤーの初期角度（差し替え用キャラ）
+    private Vector3[] initialEnemyPositions;               // 敵の初期位置（配列）
+    private Quaternion[] initialEnemyRotations;            // 敵の初期角度（配列）
     
     /// <summary>
     /// ゲームがアクティブかどうかを外部から確認するための静的プロパティ
@@ -78,6 +101,58 @@ public class IaiReactionGame : MonoBehaviour
         {
             flashImage.gameObject.SetActive(false);
         }
+        
+        // 最初のプレイヤーキャラを設定
+        if (playerAvatar != null)
+        {
+            currentPlayerAvatar = playerAvatar;
+            currentPlayerAnimator = playerAnimator;
+        }
+        
+        // 差し替え用プレイヤーキャラを初期状態で非表示にする（シーンに配置されている場合）
+        if (playerAvatarReplacement != null)
+        {
+            playerAvatarReplacement.SetActive(false);
+        }
+        
+        // 初期位置・角度を保存
+        SaveInitialTransform();
+    }
+    
+    /// <summary>
+    /// 初期位置・角度を保存する（ローカル座標）
+    /// </summary>
+    private void SaveInitialTransform()
+    {
+        // プレイヤーの初期位置・角度を保存（ローカル座標）
+        if (playerAvatar != null)
+        {
+            initialPlayerPosition = playerAvatar.transform.localPosition;
+            initialPlayerRotation = playerAvatar.transform.localRotation;
+        }
+        
+        // プレイヤーキャラ差し替え用の初期位置・角度を保存（ローカル座標）
+        if (playerAvatarReplacement != null)
+        {
+            initialPlayerReplacementPosition = playerAvatarReplacement.transform.localPosition;
+            initialPlayerReplacementRotation = playerAvatarReplacement.transform.localRotation;
+        }
+        
+        // 敵の初期位置・角度を保存（ローカル座標）
+        if (enemyAvatars != null && enemyAvatars.Length > 0)
+        {
+            initialEnemyPositions = new Vector3[enemyAvatars.Length];
+            initialEnemyRotations = new Quaternion[enemyAvatars.Length];
+            
+            for (int i = 0; i < enemyAvatars.Length; i++)
+            {
+                if (enemyAvatars[i] != null)
+                {
+                    initialEnemyPositions[i] = enemyAvatars[i].transform.localPosition;
+                    initialEnemyRotations[i] = enemyAvatars[i].transform.localRotation;
+                }
+            }
+        }
     }
     
     /// <summary>
@@ -88,7 +163,6 @@ public class IaiReactionGame : MonoBehaviour
     {
         if (isGameActive)
         {
-            Debug.LogWarning("[IaiReactionGame] ゲームは既に開始されています。");
             return;
         }
         
@@ -110,6 +184,46 @@ public class IaiReactionGame : MonoBehaviour
         isGameActive = true;
         IsGameActive = true; // 静的プロパティも更新
         gameCoroutine = StartCoroutine(GameLoop());
+    }
+    
+    /// <summary>
+    /// 居合ゲームをスキップして終了処理のみを実行する（choice2のbuttonのOnClickから呼び出す）
+    /// 暗転、敵キャラの入れ替え、明転などの終了処理を実行する
+    /// </summary>
+    public void SkipGameAndPlayTransition()
+    {
+        if (isGameActive)
+        {
+            return;
+        }
+        
+        // 既に終了トランジションが実行中の場合はスキップ
+        if (endTransitionCoroutine != null)
+        {
+            return;
+        }
+        
+        // 最初の勝負の場合は勝負回数をリセットして最初の敵キャラを設定
+        if (currentRound == 0)
+        {
+            Debug.Log($"[IaiReactionGame] SkipGameAndPlayTransition() 最初の勝負のため、敵キャラ0を設定");
+            SetEnemyAvatar(0);
+        }
+        
+        // インゲーム開始時に非表示にするオブジェクトを非表示
+        HideObjectsOnGameStart();
+        
+        // ゲームをスキップしたので、負けとして扱う
+        bool won = false;
+        
+        // 次の敵がいるかどうかを判定（currentRoundはまだインクリメントしていない）
+        // GameLoop()と同じように、PlayEndTransition()内でcurrentRoundをインクリメントする
+        bool hasNextRound = (currentRound + 1) < enemyAvatars.Length;
+        Debug.Log($"[IaiReactionGame] SkipGameAndPlayTransition() currentRound={currentRound}, hasNextRound={hasNextRound}, 次の敵インデックス={(currentRound + 1)}");
+        
+        // 終了処理を実行（暗転、敵キャラの入れ替え、明転など）
+        // PlayEndTransition()内でcurrentRoundをインクリメントする（incrementRound=true）
+        endTransitionCoroutine = StartCoroutine(PlayEndTransition(won, hasNextRound, true));
     }
     
     /// <summary>
@@ -193,12 +307,12 @@ public class IaiReactionGame : MonoBehaviour
     /// </summary>
     private void SetPausePose()
     {
-        if (playerAnimator != null && !string.IsNullOrEmpty(pauseTrigger))
+        if (currentPlayerAnimator != null && currentPlayerAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(pauseTrigger))
         {
-            playerAnimator.SetTrigger(pauseTrigger);
+            currentPlayerAnimator.SetTrigger(pauseTrigger);
         }
         
-        if (currentEnemyAnimator != null && !string.IsNullOrEmpty(pauseTrigger))
+        if (currentEnemyAnimator != null && currentEnemyAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(pauseTrigger))
         {
             currentEnemyAnimator.SetTrigger(pauseTrigger);
         }
@@ -206,7 +320,7 @@ public class IaiReactionGame : MonoBehaviour
         // 居合開始時のSEを再生
         if (AudioManager.Instance != null && iaiStartSE != null)
         {
-            AudioManager.Instance.PlaySE(iaiStartSE);
+            AudioManager.Instance.PlaySE(iaiStartSE, iaiStartSEVolume);
         }
         
     }
@@ -216,12 +330,12 @@ public class IaiReactionGame : MonoBehaviour
     /// </summary>
     private void SetIdlePose()
     {
-        if (playerAnimator != null && !string.IsNullOrEmpty(idleTrigger))
+        if (currentPlayerAnimator != null && currentPlayerAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(idleTrigger))
         {
-            playerAnimator.SetTrigger(idleTrigger);
+            currentPlayerAnimator.SetTrigger(idleTrigger);
         }
         
-        if (currentEnemyAnimator != null && !string.IsNullOrEmpty(idleTrigger))
+        if (currentEnemyAnimator != null && currentEnemyAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(idleTrigger))
         {
             currentEnemyAnimator.SetTrigger(idleTrigger);
         }
@@ -281,7 +395,7 @@ public class IaiReactionGame : MonoBehaviour
         // エフェクト表示時のSEを再生
         if (AudioManager.Instance != null && effectSE != null)
         {
-            AudioManager.Instance.PlaySE(effectSE);
+            AudioManager.Instance.PlaySE(effectSE, effectSEVolume);
         }
     }
     
@@ -344,11 +458,11 @@ public class IaiReactionGame : MonoBehaviour
         if (playerWon)
         {
             // プレイヤーが勝った：プレイヤー→Finish、敵→Yarare
-            if (playerAnimator != null && !string.IsNullOrEmpty(finishTrigger))
+            if (currentPlayerAnimator != null && currentPlayerAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(finishTrigger))
             {
-                playerAnimator.SetTrigger(finishTrigger);
+                currentPlayerAnimator.SetTrigger(finishTrigger);
             }
-            if (currentEnemyAnimator != null && !string.IsNullOrEmpty(yarareTrigger))
+            if (currentEnemyAnimator != null && currentEnemyAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(yarareTrigger))
             {
                 currentEnemyAnimator.SetTrigger(yarareTrigger);
             }
@@ -356,11 +470,11 @@ public class IaiReactionGame : MonoBehaviour
         else
         {
             // プレイヤーが負けた：プレイヤー→Yarare、敵→Finish
-            if (playerAnimator != null && !string.IsNullOrEmpty(yarareTrigger))
+            if (currentPlayerAnimator != null && currentPlayerAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(yarareTrigger))
             {
-                playerAnimator.SetTrigger(yarareTrigger);
+                currentPlayerAnimator.SetTrigger(yarareTrigger);
             }
-            if (currentEnemyAnimator != null && !string.IsNullOrEmpty(finishTrigger))
+            if (currentEnemyAnimator != null && currentEnemyAnimator.runtimeAnimatorController != null && !string.IsNullOrEmpty(finishTrigger))
             {
                 currentEnemyAnimator.SetTrigger(finishTrigger);
             }
@@ -375,7 +489,7 @@ public class IaiReactionGame : MonoBehaviour
         // フラッシュ発生時のSEを再生
         if (AudioManager.Instance != null && flashSE != null)
         {
-            AudioManager.Instance.PlaySE(flashSE);
+            AudioManager.Instance.PlaySE(flashSE, flashSEVolume);
         }
         
         if (flashImage != null)
@@ -383,6 +497,114 @@ public class IaiReactionGame : MonoBehaviour
             flashImage.gameObject.SetActive(true);
             yield return new WaitForSeconds(flashDuration);
             flashImage.gameObject.SetActive(false);
+        }
+        
+        // フラッシュ後に位置・角度を変更
+        ChangePositionAfterFlash();
+    }
+    
+    /// <summary>
+    /// フラッシュ後にキャラクターの位置・角度を変更する（ローカル座標）
+    /// </summary>
+    private void ChangePositionAfterFlash()
+    {
+        // プレイヤーの位置・角度を変更（ローカル座標）
+        if (currentPlayerAvatar != null)
+        {
+            currentPlayerAvatar.transform.localPosition = playerPositionAfterFlash;
+            currentPlayerAvatar.transform.localRotation = Quaternion.Euler(playerRotationAfterFlash);
+        }
+        
+        // 現在の敵の位置・角度を変更（ローカル座標）
+        if (currentEnemyAvatar != null)
+        {
+            // 現在のラウンドに対応する敵キャラの位置・角度を取得
+            int enemyIndex = currentRound;
+            
+            // 位置の設定（範囲外の場合は最後の要素を参照）
+            if (enemyPositionsAfterFlash != null && enemyPositionsAfterFlash.Length > 0)
+            {
+                int positionIndex = enemyIndex;
+                if (positionIndex < 0 || positionIndex >= enemyPositionsAfterFlash.Length)
+                {
+                    // 範囲外の場合は最後の要素を使用
+                    positionIndex = enemyPositionsAfterFlash.Length - 1;
+                }
+                currentEnemyAvatar.transform.localPosition = enemyPositionsAfterFlash[positionIndex];
+            }
+            
+            // 角度の設定（範囲外の場合は最後の要素を参照）
+            if (enemyRotationsAfterFlash != null && enemyRotationsAfterFlash.Length > 0)
+            {
+                int rotationIndex = enemyIndex;
+                if (rotationIndex < 0 || rotationIndex >= enemyRotationsAfterFlash.Length)
+                {
+                    // 範囲外の場合は最後の要素を使用
+                    rotationIndex = enemyRotationsAfterFlash.Length - 1;
+                }
+                currentEnemyAvatar.transform.localRotation = Quaternion.Euler(enemyRotationsAfterFlash[rotationIndex]);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// キャラクターを初期位置・角度に戻す（ローカル座標）
+    /// </summary>
+    private void ResetToInitialPosition()
+    {
+        // 現在のプレイヤーを初期位置・角度に戻す（ローカル座標）
+        if (currentPlayerAvatar != null)
+        {
+            // 確実に表示されるようにする
+            if (!currentPlayerAvatar.activeSelf)
+            {
+                currentPlayerAvatar.SetActive(true);
+            }
+            
+            // 最初のキャラの場合は初期位置を使用
+            if (currentPlayerAvatar == playerAvatar)
+            {
+                currentPlayerAvatar.transform.localPosition = initialPlayerPosition;
+                currentPlayerAvatar.transform.localRotation = initialPlayerRotation;
+            }
+            else if (currentPlayerAvatar == playerAvatarReplacement)
+            {
+                // 差し替え用キャラの場合は、差し替え用の初期位置を使用
+                currentPlayerAvatar.transform.localPosition = initialPlayerReplacementPosition;
+                currentPlayerAvatar.transform.localRotation = initialPlayerReplacementRotation;
+            }
+        }
+        
+        // 現在の敵を初期位置・角度に戻す（ローカル座標）
+        if (currentEnemyAvatar != null)
+        {
+            // 確実に表示されるようにする
+            if (!currentEnemyAvatar.activeSelf)
+            {
+                currentEnemyAvatar.SetActive(true);
+            }
+            
+            // 現在の敵キャラのインデックスを取得
+            int enemyIndex = -1;
+            if (enemyAvatars != null)
+            {
+                for (int i = 0; i < enemyAvatars.Length; i++)
+                {
+                    if (enemyAvatars[i] == currentEnemyAvatar)
+                    {
+                        enemyIndex = i;
+                        break;
+                    }
+                }
+            }
+            
+            // 初期位置・角度を設定
+            if (enemyIndex >= 0 && initialEnemyPositions != null && initialEnemyRotations != null && 
+                enemyIndex < initialEnemyPositions.Length && enemyIndex < initialEnemyRotations.Length)
+            {
+                currentEnemyAvatar.transform.localPosition = initialEnemyPositions[enemyIndex];
+                currentEnemyAvatar.transform.localRotation = initialEnemyRotations[enemyIndex];
+            }
         }
     }
     
@@ -459,20 +681,68 @@ public class IaiReactionGame : MonoBehaviour
     }
     
     /// <summary>
+    /// プレイヤーキャラを差し替え用キャラに設定する
+    /// </summary>
+    private void SetPlayerAvatar()
+    {
+        // 差し替え用キャラが設定されていない場合は何もしない
+        if (playerAvatarReplacement == null)
+        {
+            return;
+        }
+        
+        // 現在のプレイヤーキャラを非表示
+        if (currentPlayerAvatar != null && currentPlayerAvatar != playerAvatarReplacement)
+        {
+            currentPlayerAvatar.SetActive(false);
+        }
+        
+        // 新しいプレイヤーキャラを設定
+        currentPlayerAvatar = playerAvatarReplacement;
+        if (currentPlayerAvatar != null)
+        {
+            // 確実に表示されるようにする
+            currentPlayerAvatar.SetActive(true);
+            
+            // 保存されている初期位置・角度を初期設定として使用（本当の初期位置）
+            initialPlayerReplacementPosition = initialPlayerPosition;
+            initialPlayerReplacementRotation = initialPlayerRotation;
+            
+            // 入れ替え後のGameObjectを初期位置・角度に設定
+            currentPlayerAvatar.transform.localPosition = initialPlayerPosition;
+            currentPlayerAvatar.transform.localRotation = initialPlayerRotation;
+            
+            // アニメーターを取得
+            if (playerAnimatorReplacement != null)
+            {
+                currentPlayerAnimator = playerAnimatorReplacement;
+            }
+            else
+            {
+                // アニメーターが設定されていない場合は、GameObjectから取得を試みる
+                currentPlayerAnimator = currentPlayerAvatar.GetComponent<Animator>();
+            }
+        }
+    }
+    
+    /// <summary>
     /// 敵キャラを設定する（指定されたインデックスの敵を使用）
     /// </summary>
     private void SetEnemyAvatar(int enemyIndex)
     {
+        Debug.Log($"[IaiReactionGame] SetEnemyAvatar() 開始: enemyIndex={enemyIndex}, enemyAvatars.Length={enemyAvatars?.Length ?? 0}");
+        
         // 範囲チェック
         if (enemyAvatars == null || enemyIndex < 0 || enemyIndex >= enemyAvatars.Length)
         {
-            Debug.LogWarning($"[IaiReactionGame] 敵キャラのインデックスが無効です: {enemyIndex}");
+            Debug.LogWarning($"[IaiReactionGame] SetEnemyAvatar() 範囲外: enemyIndex={enemyIndex}, enemyAvatars.Length={enemyAvatars?.Length ?? 0}");
             return;
         }
         
         // 現在の敵キャラを非表示
         if (currentEnemyAvatar != null)
         {
+            Debug.Log($"[IaiReactionGame] SetEnemyAvatar() 現在の敵キャラを非表示: {currentEnemyAvatar.name}");
             currentEnemyAvatar.SetActive(false);
         }
         
@@ -480,20 +750,28 @@ public class IaiReactionGame : MonoBehaviour
         currentEnemyAvatar = enemyAvatars[enemyIndex];
         if (currentEnemyAvatar != null)
         {
+            Debug.Log($"[IaiReactionGame] SetEnemyAvatar() 新しい敵キャラを設定: enemyIndex={enemyIndex}, name={currentEnemyAvatar.name}");
             currentEnemyAvatar.SetActive(true);
             
             // アニメーターを取得
             if (enemyAnimators != null && enemyIndex < enemyAnimators.Length)
             {
                 currentEnemyAnimator = enemyAnimators[enemyIndex];
+                Debug.Log($"[IaiReactionGame] SetEnemyAvatar() アニメーターを設定: enemyIndex={enemyIndex}");
             }
             else
             {
                 // アニメーター配列が設定されていない場合は、GameObjectから取得を試みる
                 currentEnemyAnimator = currentEnemyAvatar.GetComponent<Animator>();
+                Debug.Log($"[IaiReactionGame] SetEnemyAvatar() アニメーターをGameObjectから取得: {currentEnemyAnimator != null}");
             }
         }
+        else
+        {
+            Debug.LogWarning($"[IaiReactionGame] SetEnemyAvatar() 敵キャラがnull: enemyIndex={enemyIndex}");
+        }
         
+        Debug.Log($"[IaiReactionGame] SetEnemyAvatar() 完了: enemyIndex={enemyIndex}");
     }
     
     /// <summary>
@@ -503,6 +781,8 @@ public class IaiReactionGame : MonoBehaviour
     /// <param name="hasNextRound">次の勝負があるかどうか（勝った場合のみ）</param>
     private void EndGame(bool won, bool hasNextRound = false)
     {
+        Debug.Log($"[IaiReactionGame] EndGame() 開始: won={won}, hasNextRound={hasNextRound}, endTransitionCoroutine={endTransitionCoroutine != null}");
+        
         isGameActive = false;
         IsGameActive = false; // 静的プロパティも更新
         isWaitingForClick = false;
@@ -517,75 +797,123 @@ public class IaiReactionGame : MonoBehaviour
             gameCoroutine = null;
         }
         
+        // 既に終了トランジションが実行中の場合はスキップ
+        if (endTransitionCoroutine != null)
+        {
+            Debug.LogWarning($"[IaiReactionGame] EndGame() 既に終了トランジションが実行中のため、処理をスキップします");
+            return;
+        }
+        
         // トランジションを実行（0から1への遷移）
         // SetIdlePose()とShowObjectsOnGameEnd()はトランジション完了後に実行される
-        StartCoroutine(PlayEndTransition(won, hasNextRound));
+        endTransitionCoroutine = StartCoroutine(PlayEndTransition(won, hasNextRound));
     }
     
     /// <summary>
     /// ゲーム終了時のトランジションを実行（暗転→敵入れ替え、明転はCsvScenarioPlayerに委譲）
+    /// SkipGameAndPlayTransition()から呼び出される場合、currentRoundをインクリメントする
     /// </summary>
     /// <param name="won">勝利したかどうか</param>
     /// <param name="hasNextRound">次の勝負があるかどうか</param>
-    private IEnumerator PlayEndTransition(bool won, bool hasNextRound)
+    /// <param name="incrementRound">currentRoundをインクリメントするかどうか（SkipGameAndPlayTransition()から呼び出される場合のみtrue）</param>
+    private IEnumerator PlayEndTransition(bool won, bool hasNextRound, bool incrementRound = false)
     {
-        // 結果表示を少し待ってからトランジションを開始
-        yield return new WaitForSeconds(1.0f);
+        Debug.Log($"[IaiReactionGame] PlayEndTransition() 開始: won={won}, hasNextRound={hasNextRound}, incrementRound={incrementRound}, currentRound={currentRound}");
         
-        TransitionController transition = gameUIManager?.GetMainTransition();
-        if (transition != null)
+        try
         {
-            // 次の勝負がある場合、暗転中に敵キャラを入れ替える（勝敗に関わらず）
-            if (hasNextRound && currentRound < enemyAvatars.Length)
+            // SkipGameAndPlayTransition()から呼び出された場合、currentRoundをインクリメント
+            if (incrementRound)
             {
-                // まず暗転（0から1への遷移）
-                bool darkTransitionComplete = false;
-                transition.PlayFromBlack(() =>
+                int oldRound = currentRound;
+                currentRound++;
+                Debug.Log($"[IaiReactionGame] PlayEndTransition() currentRoundをインクリメント: {oldRound} → {currentRound}");
+            }
+            
+            // 結果表示を少し待ってからトランジションを開始
+            yield return new WaitForSeconds(1.0f);
+            
+            TransitionController transition = gameUIManager?.GetMainTransition();
+            if (transition != null)
+            {
+                // 次の勝負がある場合、暗転中に敵キャラを入れ替える（勝敗に関わらず）
+                if (hasNextRound && currentRound < enemyAvatars.Length)
                 {
-                    darkTransitionComplete = true;
-                });
-                
-                // 暗転完了を待つ
-                yield return new WaitUntil(() => darkTransitionComplete);
-                
-                // 暗転中に敵キャラを入れ替える
-                yield return StartCoroutine(SwitchEnemyDuringTransition());
-                
-                // 入れ替え完了後、非表示にしていたオブジェクトを表示
-                ShowObjectsOnGameEnd();
-                
-                // アバターを待機モーション（Idle）に戻す
-                SetIdlePose();
-                
-                // 明転はCsvScenarioPlayerに委譲
-                if (csvScenarioPlayer != null)
-                {
-                    csvScenarioPlayer.PlayFadeInTransition();
+                    Debug.Log($"[IaiReactionGame] PlayEndTransition() 次の勝負があるため、敵キャラを入れ替えます: currentRound={currentRound}, enemyAvatars.Length={enemyAvatars.Length}");
+                    
+                    // まず暗転（0から1への遷移）
+                    bool darkTransitionComplete = false;
+                    transition.PlayFromBlack(() =>
+                    {
+                        darkTransitionComplete = true;
+                    });
+                    
+                    // 暗転完了を待つ
+                    yield return new WaitUntil(() => darkTransitionComplete);
+                    
+                    // 二回目の居合が終わった時（currentRound == 2）にプレイヤーキャラを差し替え
+                    // 差し替え用キャラが設定されている場合のみ実行
+                    if (currentRound == 2 && playerAvatarReplacement != null)
+                    {
+                        Debug.Log($"[IaiReactionGame] PlayEndTransition() プレイヤーキャラを差し替えます: currentRound={currentRound}");
+                        // プレイヤーキャラを差し替え
+                        yield return StartCoroutine(SwitchPlayerDuringTransition());
+                    }
+                    
+                    // 暗転中に敵キャラを入れ替える
+                    Debug.Log($"[IaiReactionGame] PlayEndTransition() 敵キャラを入れ替えます: currentRound={currentRound}");
+                    yield return StartCoroutine(SwitchEnemyDuringTransition());
+                    
+                    // キャラクター差し替え後、初期位置・角度に戻す
+                    ResetToInitialPosition();
+                    
+                    // 入れ替え完了後、非表示にしていたオブジェクトを表示
+                    ShowObjectsOnGameEnd();
+                    
+                    // アバターを待機モーション（Idle）に戻す
+                    SetIdlePose();
+                    
+                    // 明転はCsvScenarioPlayerに委譲
+                    if (csvScenarioPlayer != null)
+                    {
+                        csvScenarioPlayer.PlayFadeInTransition();
+                    }
                 }
                 else
                 {
-                    Debug.LogWarning("[IaiReactionGame] CsvScenarioPlayerが設定されていません。明転を実行できません。");
-                }
-            }
-            else
-            {
-                // 次の勝負がない場合、通常のトランジション（0から1への遷移）
-                transition.PlayFromBlack(() =>
-                {
+                    // 次の勝負がない場合、通常のトランジション（0から1への遷移）
+                    bool darkTransitionComplete = false;
+                    transition.PlayFromBlack(() =>
+                    {
+                        darkTransitionComplete = true;
+                    });
+                    
+                    // 暗転完了を待つ
+                    yield return new WaitUntil(() => darkTransitionComplete);
+                    
+                    // 暗転後に初期位置・角度に戻す
+                    ResetToInitialPosition();
+                    
                     // トランジション完了後にアバターを待機モーション（Idle）に戻す
                     SetIdlePose();
                     
                     // トランジション完了後に非表示にしたオブジェクトを表示
                     ShowObjectsOnGameEnd();
-                });
+                }
+            }
+            else
+            {
+                // トランジションが設定されていない場合も、初期位置に戻し、Idleポーズに戻し、オブジェクトを表示
+                ResetToInitialPosition();
+                SetIdlePose();
+                ShowObjectsOnGameEnd();
             }
         }
-        else
+        finally
         {
-            Debug.LogWarning("[IaiReactionGame] GameUIManagerまたはmainMenuToGameTransitionが設定されていません。");
-            // トランジションが設定されていない場合も、Idleポーズに戻し、オブジェクトを表示
-            SetIdlePose();
-            ShowObjectsOnGameEnd();
+            // コルーチン終了時にフラグをリセット
+            endTransitionCoroutine = null;
+            Debug.Log($"[IaiReactionGame] PlayEndTransition() 完了: endTransitionCoroutineをリセット");
         }
     }
     
@@ -594,13 +922,28 @@ public class IaiReactionGame : MonoBehaviour
     /// </summary>
     private IEnumerator SwitchEnemyDuringTransition()
     {
+        Debug.Log($"[IaiReactionGame] SwitchEnemyDuringTransition() 開始: currentRound={currentRound}, enemyAvatars.Length={enemyAvatars?.Length ?? 0}");
         
         // 次の敵キャラに切り替え
+        Debug.Log($"[IaiReactionGame] SwitchEnemyDuringTransition() SetEnemyAvatar({currentRound}) を呼び出します");
         SetEnemyAvatar(currentRound);
         
         // 入れ替え処理が完了するまで少し待つ（視覚的な安定のため）
         yield return new WaitForSeconds(0.1f);
         
+        Debug.Log($"[IaiReactionGame] SwitchEnemyDuringTransition() 完了");
+    }
+    
+    /// <summary>
+    /// トランジション中（暗転中）にプレイヤーキャラを入れ替える
+    /// </summary>
+    private IEnumerator SwitchPlayerDuringTransition()
+    {
+        // プレイヤーキャラを差し替え用キャラに切り替え
+        SetPlayerAvatar();
+        
+        // 入れ替え処理が完了するまで少し待つ（視覚的な安定のため）
+        yield return new WaitForSeconds(0.1f);
     }
     
     /// <summary>
@@ -626,6 +969,9 @@ public class IaiReactionGame : MonoBehaviour
         
         // エフェクトを非表示
         HideEffect();
+        
+        // 初期位置・角度に戻す
+        ResetToInitialPosition();
         
         // アバターを待機モーション（Idle）に戻す
         SetIdlePose();

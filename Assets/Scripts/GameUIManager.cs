@@ -71,6 +71,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void OnTitleScreenClicked()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         if (titleToMainMenuTransition != null)
         {
             // シームレスな遷移のため、先に下のPanel（mainMenuPanel）をactiveにする
@@ -96,6 +102,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void OpenSettings()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         SetOnly(settingsPanel);
     }
 
@@ -104,6 +116,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void OpenCredits()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         SetOnly(creditsPanel);
     }
 
@@ -112,6 +130,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void BackToMainMenu()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         SetOnly(mainMenuPanel);
     }
 
@@ -120,6 +144,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void StartGame()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         if (mainMenuToGameTransition != null)
         {
             // _Progressを0から1に遷移させるアニメーション
@@ -259,6 +289,12 @@ public class GameUIManager : MonoBehaviour
     /// </summary>
     public void BackToTitleScreen()
     {
+        // 決定SEを再生
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayDecisionSE();
+        }
+
         // シーンをロードする場合
         if (loadSceneOnEnding && sceneNames != null && sceneNames.Length > 0)
         {

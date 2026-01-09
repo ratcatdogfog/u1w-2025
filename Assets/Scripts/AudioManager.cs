@@ -18,6 +18,11 @@ public class AudioManager : MonoBehaviour
     [SerializeField] private AudioClip sliderSE;
     [SerializeField] private float sliderSEDelay = 0.1f; // 値の変化が止まってからSEを鳴らすまでの待機時間（秒）
 
+    [Header("UI SE")]
+    [SerializeField] private AudioClip decisionSE; // UI選択時の決定SE
+    [SerializeField] private AudioClip clickableClickSE; // クリッカブル時のクリックSE
+    [Range(0f, 1f)] [SerializeField] private float clickableClickSEVolumeScale = 0.5f; // クリッカブルSEの音量スケール（決定SEを基準とした相対音量）
+
     [Header("Defaults")]
     [Range(0f, 1f)] [SerializeField] private float bgmVolume = 0.5f;
     [Range(0f, 1f)] [SerializeField] private float seVolume  = 1.0f;
@@ -137,6 +142,28 @@ public class AudioManager : MonoBehaviour
         if (seSlider != null && Mathf.Abs(seSlider.value - seVolume) > 0.001f)
         {
             seSlider.value = seVolume;
+        }
+    }
+
+    /// <summary>
+    /// UI選択時の決定SEを再生する
+    /// </summary>
+    public void PlayDecisionSE()
+    {
+        if (decisionSE != null)
+        {
+            PlaySE(decisionSE);
+        }
+    }
+
+    /// <summary>
+    /// クリッカブル時のクリックSEを再生する
+    /// </summary>
+    public void PlayClickableClickSE()
+    {
+        if (clickableClickSE != null)
+        {
+            PlaySE(clickableClickSE, clickableClickSEVolumeScale);
         }
     }
 
